@@ -1,0 +1,13 @@
+streamlit == 1.37.1
+pyzbar == 0.1.9
+pillow == 10.3.0
+oauth2client == 4.1.3
+oauthlib == 3.2.2
+pandas == 2.2.2
+gspread == 5.12.4
+numpy
+plotly
+pydeck
+scikit-learn
+kneed
+geopy
