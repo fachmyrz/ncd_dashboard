@@ -1,10 +1,5 @@
-# Byte-compiled / cache
 __pycache__/
 *.pyc
-
-# Envs
 .venv/
 .env
-
-# Streamlit local secrets (never commit!)
 .streamlit/secrets.toml
