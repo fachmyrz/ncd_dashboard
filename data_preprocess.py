@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from difflib import get_close_matches
-from geopy.distance import geodesic
 from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
 
 jabodetabek_list = ["Bekasi","Bogor","Depok","Jakarta Barat","Jakarta Pusat","Jakarta Selatan","Jakarta Timur","Jakarta Utara","Tangerang","Tangerang Selatan","Cibitung","Tambun","Cikarang","Karawaci","Alam Sutera","Cileungsi","Sentul","Cibubur","Bintaro"]
@@ -69,14 +68,18 @@ def clean_visits(df):
         cl = c.lower()
         if cl in ["visit_datetime","tanggal datang","tanggal_datang","visit date","date","date_time_start","date time start","waktu datang","tanggal","order_date","created_at","created at"]:
             cand_date_cols.append(c)
+    if not cand_date_cols:
+        for c in df.columns:
+            if "date" in c.lower():
+                cand_date_cols.append(c)
     order_dt = pd.Series([pd.NaT]*len(df))
     for c in cand_date_cols:
         s = pd.to_datetime(df[c], errors="coerce")
         order_dt = order_dt.fillna(s)
     df["visit_datetime"] = order_dt
-    def first_col(df, names):
+    def first_col(dfx, names):
         for n in names:
-            if n in df.columns:
+            if n in dfx.columns:
                 return n
         return None
     client_col = first_col(df, ["client_name","Nama Klien","nama klien","nama_klien","Client Name"])
@@ -120,9 +123,10 @@ def clean_visits(df):
             parsed_ll = df[comb].astype(str).apply(_parse_ll)
             df["latitude"] = pd.to_numeric(pd.Series([t[0] for t in parsed_ll], index=df.index), errors="coerce")
             df["longitude"] = pd.to_numeric(pd.Series([t[1] for t in parsed_ll], index=df.index), errors="coerce")
-        else:
-            df["latitude"] = pd.to_numeric(df.get("latitude", pd.Series([np.nan]*len(df))), errors="coerce")
-            df["longitude"] = pd.to_numeric(df.get("longitude", pd.Series([np.nan]*len(df))), errors="coerce")
+    df["latitude"] = pd.to_numeric(df.get("latitude", pd.Series([np.nan]*len(df))), errors="coerce")
+    df["longitude"] = pd.to_numeric(df.get("longitude", pd.Series([np.nan]*len(df))), errors="coerce")
+    df.loc[~df["latitude"].between(-90, 90), "latitude"] = np.nan
+    df.loc[~df["longitude"].between(-180, 180), "longitude"] = np.nan
     keep = ["visit_datetime","client_name","employee_name","employee_id","latitude","longitude"]
     keep = [k for k in keep if k in df.columns]
     return df[keep].reset_index(drop=True)
@@ -154,12 +158,20 @@ def clean_orders(df):
         order_dt = order_dt.fillna(s)
     dealer_id = pd.to_numeric(df[dealer_col], errors="coerce").astype("Int64") if dealer_col else pd.Series([pd.NA]*len(df), dtype="Int64")
     amount = pd.to_numeric(df[amount_col], errors="coerce") if amount_col else pd.Series([0.0]*len(df), dtype="float")
-    out = pd.DataFrame({
-        "dealer_id": dealer_id,
-        "order_date": order_dt,
-        "total_paid_after_tax": amount
-    })
+    out = pd.DataFrame({"dealer_id": dealer_id, "order_date": order_dt, "total_paid_after_tax": amount})
     return out
+
+def haversine_km(lat1, lon1, lat2_arr, lon2_arr):
+    R = 6371.0
+    lat1_r = np.radians(lat1)
+    lon1_r = np.radians(lon1)
+    lat2_r = np.radians(pd.to_numeric(lat2_arr, errors="coerce"))
+    lon2_r = np.radians(pd.to_numeric(lon2_arr, errors="coerce"))
+    dlat = lat2_r - lat1_r
+    dlon = lon2_r - lon1_r
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1_r) * np.cos(lat2_r) * np.sin(dlon/2.0)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+    return R * c
 
 def assign_visits_to_dealers(visits, dealers, max_km=1.0):
     if visits is None or visits.empty:
@@ -169,13 +181,18 @@ def assign_visits_to_dealers(visits, dealers, max_km=1.0):
         v["client_name_assigned"] = v.get("client_name", None)
         return v
     v = visits.copy()
-    d = dealers.dropna(subset=["latitude","longitude"])[["id_dealer_outlet","client_name","latitude","longitude"]].reset_index(drop=True)
+    d = dealers.dropna(subset=["latitude","longitude"]).copy()
+    d = d[d["latitude"].between(-90, 90) & d["longitude"].between(-180, 180)]
+    d = d[["id_dealer_outlet","client_name","latitude","longitude"]].reset_index(drop=True)
+    if d.empty:
+        v["client_name_assigned"] = v.get("client_name", None)
+        return v
     d["client_lower"] = d["client_name"].astype(str).str.lower()
     names = d["client_lower"].tolist()
     def match_row(row):
         cn = str(row.get("client_name","")).strip()
-        lat = row.get("latitude")
-        lon = row.get("longitude")
+        lat = pd.to_numeric(row.get("latitude"), errors="coerce")
+        lon = pd.to_numeric(row.get("longitude"), errors="coerce")
         if cn:
             cl = cn.lower()
             if cl in d["client_lower"].values:
@@ -183,18 +200,15 @@ def assign_visits_to_dealers(visits, dealers, max_km=1.0):
             close = get_close_matches(cl, names, n=1, cutoff=0.80)
             if close:
                 return d.loc[d["client_lower"]==close[0], "client_name"].iloc[0]
-        try:
-            lat = float(lat)
-            lon = float(lon)
-        except:
+        if pd.isna(lat) or pd.isna(lon):
             return None
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             return None
-        dist = d.apply(lambda r: geodesic((lat,lon),(r.latitude,r.longitude)).km, axis=1)
-        idx = int(dist.idxmin()) if not dist.isna().all() else None
-        if idx is None:
+        dist = haversine_km(lat, lon, d["latitude"].values, d["longitude"].values)
+        if dist.size == 0 or np.all(np.isnan(dist)):
             return None
-        if dist.loc[idx] <= max_km:
+        idx = int(np.nanargmin(dist))
+        if dist[idx] <= max_km:
             return d.loc[idx, "client_name"]
         return None
     v["matched_client"] = v.apply(match_row, axis=1)
