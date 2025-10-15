@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
 from difflib import get_close_matches
 from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
@@ -31,7 +31,7 @@ def clean_dealers(df):
             colmap[c] = "business_type"
     df = df.rename(columns=colmap)
     if "id_dealer_outlet" in df.columns:
-        df["id_dealer_outlet"] = pd.to_numeric(df["id_dealer_outlet"], errors="coerce")
+        df["id_dealer_outlet"] = pd.to_numeric(df["id_dealer_outlet"], errors="coerce").astype("Int64")
     for k in ["latitude","longitude"]:
         if k in df.columns:
             df[k] = pd.to_numeric(df[k].astype(str).str.replace(",","").str.strip("."), errors="coerce")
@@ -130,7 +130,7 @@ def clean_orders(df):
     if "order_date" in df.columns:
         df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
     if "dealer_id" in df.columns:
-        df["dealer_id"] = pd.to_numeric(df["dealer_id"], errors="coerce")
+        df["dealer_id"] = pd.to_numeric(df["dealer_id"], errors="coerce").astype("Int64")
     if "total_paid_after_tax" in df.columns:
         df["total_paid_after_tax"] = pd.to_numeric(df["total_paid_after_tax"], errors="coerce").fillna(0.0)
     return df
@@ -239,31 +239,41 @@ if isinstance(run, pd.DataFrame) and not run.empty:
             break
     rm = run.rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name","LMS Id":"joined_dse","IsActive":"active_dse"})
     if id_col and "id_dealer_outlet" not in rm.columns:
-        rm["id_dealer_outlet"] = pd.to_numeric(run[id_col], errors="coerce")
-    if "id_dealer_outlet" in rm.columns and not isinstance(rm["id_dealer_outlet"], pd.Series):
-        rm["id_dealer_outlet"] = pd.to_numeric(pd.Series(rm["id_dealer_outlet"]), errors="coerce")
-    if "IsActive" in run.columns and "End Date" in run.columns:
-        ao = run.copy()
-        ao = ao[ao["IsActive"].astype(str) == "1"]
-        ao["End Date"] = pd.to_datetime(ao["End Date"], errors="coerce")
-        if id_col and "id_dealer_outlet" not in ao.columns:
-            ao["id_dealer_outlet"] = pd.to_numeric(ao[id_col], errors="coerce")
-        ao_group = ao.groupby("id_dealer_outlet").agg(nearest_end_date=("End Date","min")).reset_index()
-    else:
-        ao_group = pd.DataFrame(columns=["id_dealer_outlet","nearest_end_date"])
+        rm["id_dealer_outlet"] = pd.to_numeric(run[id_col], errors="coerce").astype("Int64")
+    elif "id_dealer_outlet" in rm.columns:
+        rm["id_dealer_outlet"] = pd.to_numeric(rm["id_dealer_outlet"], errors="coerce").astype("Int64")
     rm["joined_dse"] = pd.to_numeric(rm.get("joined_dse"), errors="coerce").fillna(0)
     rm["active_dse"] = pd.to_numeric(rm.get("active_dse"), errors="coerce").fillna(0)
+    if "IsActive" in run.columns and "End Date" in run.columns:
+        ao = run.copy()
+        if id_col and "id_dealer_outlet" not in ao.columns:
+            ao["id_dealer_outlet"] = pd.to_numeric(ao[id_col], errors="coerce").astype("Int64")
+        elif "id_dealer_outlet" in ao.columns:
+            ao["id_dealer_outlet"] = pd.to_numeric(ao["id_dealer_outlet"], errors="coerce").astype("Int64")
+        ao = ao[ao["IsActive"].astype(str) == "1"]
+        ao["End Date"] = pd.to_datetime(ao["End Date"], errors="coerce")
+        ao_group = ao.groupby("id_dealer_outlet").agg(nearest_end_date=("End Date","min")).reset_index()
+        ao_group["id_dealer_outlet"] = ao_group["id_dealer_outlet"].astype("Int64")
+    else:
+        ao_group = pd.DataFrame(columns=["id_dealer_outlet","nearest_end_date"])
+        ao_group["id_dealer_outlet"] = ao_group.get("id_dealer_outlet", pd.Series([], dtype="Int64")).astype("Int64")
     if "id_dealer_outlet" in rm.columns:
         grouped_run_order = rm.dropna(subset=["id_dealer_outlet"]).groupby(["id_dealer_outlet","dealer_name"]).agg(joined_dse=("joined_dse","count"), active_dse=("active_dse","sum")).reset_index()
-        grouped_run_order = grouped_run_order.merge(ao_group, how="left", on="id_dealer_outlet")
+        grouped_run_order["id_dealer_outlet"] = grouped_run_order["id_dealer_outlet"].astype("Int64")
+        if not ao_group.empty:
+            grouped_run_order = grouped_run_order.merge(ao_group, how="left", on="id_dealer_outlet")
+        else:
+            grouped_run_order["nearest_end_date"] = pd.NaT
     else:
         grouped_run_order = pd.DataFrame(columns=["id_dealer_outlet","dealer_name","joined_dse","active_dse","nearest_end_date"])
+        grouped_run_order["id_dealer_outlet"] = grouped_run_order.get("id_dealer_outlet", pd.Series([], dtype="Int64")).astype("Int64")
 else:
     grouped_run_order = pd.DataFrame(columns=["id_dealer_outlet","dealer_name","joined_dse","active_dse","nearest_end_date"])
+    grouped_run_order["id_dealer_outlet"] = grouped_run_order.get("id_dealer_outlet", pd.Series([], dtype="Int64")).astype("Int64")
 
 avail_df = df_dealer.copy()
 if "id_dealer_outlet" in avail_df.columns:
-    avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce")
+    avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce").astype("Int64")
 if "business_type" in avail_df.columns:
     avail_df = avail_df[avail_df["business_type"].str.lower()=="car"]
 if 'location_detail' in globals() and isinstance(location_detail, pd.DataFrame) and not location_detail.empty:
@@ -284,18 +294,23 @@ else:
 avail_df_merge = avail_df.merge(grouped_run_order.drop(columns=["dealer_name"], errors="ignore"), on="id_dealer_outlet", how="left")
 vm = visit_metrics.rename(columns={"client_name":"client_name"})
 avail_df_merge = avail_df_merge.merge(vm, left_on="client_name", right_on="client_name", how="left")
-amr = avg_monthly_revenue.rename(columns={"dealer_id":"id_dealer_outlet"})
-avail_df_merge = avail_df_merge.merge(amr, on="id_dealer_outlet", how="left")
-rt = revenue_total.rename(columns={"dealer_id":"id_dealer_outlet"})
-avail_df_merge = avail_df_merge.merge(rt, on="id_dealer_outlet", how="left")
+if not sales_orders.empty:
+    amr = avg_monthly_revenue.rename(columns={"dealer_id":"id_dealer_outlet"})
+    amr["id_dealer_outlet"] = amr["id_dealer_outlet"].astype("Int64")
+    avail_df_merge = avail_df_merge.merge(amr, on="id_dealer_outlet", how="left")
+    rt = revenue_total.rename(columns={"dealer_id":"id_dealer_outlet"})
+    rt["id_dealer_outlet"] = rt["id_dealer_outlet"].astype("Int64")
+    avail_df_merge = avail_df_merge.merge(rt, on="id_dealer_outlet", how="left")
+else:
+    avail_df_merge["avg_monthly_revenue"] = 0.0
+    avail_df_merge["total_revenue"] = 0.0
+
 avail_df_merge["joined_dse"] = avail_df_merge.get("joined_dse", 0).fillna(0).astype(int)
 avail_df_merge["active_dse"] = avail_df_merge.get("active_dse", 0).fillna(0).astype(int)
 avail_df_merge["total_dse"] = avail_df_merge.get("total_dse", 0).fillna(0).astype(int)
 avail_df_merge["visits_last_N"] = avail_df_merge.get("visits_last_N", 0).fillna(0).astype(int)
 avail_df_merge["avg_weekly_visits"] = avail_df_merge.get("avg_weekly_visits", 0).fillna(0).astype(float)
-avail_df_merge["nearest_end_date"] = avail_df_merge.get("nearest_end_date")
-avail_df_merge["avg_monthly_revenue"] = avail_df_merge.get("avg_monthly_revenue").fillna(0) if "avg_monthly_revenue" in avail_df_merge.columns else 0
-avail_df_merge["total_revenue"] = avail_df_merge.get("total_revenue").fillna(0) if "total_revenue" in avail_df_merge.columns else 0
+avail_df_merge["nearest_end_date"] = pd.to_datetime(avail_df_merge.get("nearest_end_date"), errors="coerce")
 
 def compute_tag(row):
     if row.get("active_dse", 0) > 0:
@@ -341,19 +356,6 @@ except NameError:
         df_visit = df_visits_raw
     else:
         df_visit = pd.DataFrame()
-
-try:
-    avail_df_merge
-except NameError:
-    if "avail_df" in globals() and "grouped_run_order" in globals():
-        try:
-            avail_df_merge = avail_df.merge(grouped_run_order.drop(columns=["dealer_name"], errors="ignore"), on="id_dealer_outlet", how="left")
-        except Exception:
-            avail_df_merge = avail_df.copy()
-    elif "avail_df" in globals():
-        avail_df_merge = avail_df.copy()
-    else:
-        avail_df_merge = pd.DataFrame()
 
 if "revenue_monthly" not in globals():
     revenue_monthly = globals().get("revenue_monthly", pd.DataFrame())
