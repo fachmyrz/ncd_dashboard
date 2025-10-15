@@ -28,6 +28,8 @@ def clean_dealers(df):
             colmap[c] = "total_dse"
         if cl in ["sales_name","bde","bde name","employee name"]:
             colmap[c] = "sales_name"
+        if cl in ["business_type","business type","type","kategori","business_type_field"]:
+            colmap[c] = "business_type"
     df = df.rename(columns=colmap)
     if "id_dealer_outlet" in df.columns:
         df["id_dealer_outlet"] = pd.to_numeric(df["id_dealer_outlet"], errors="coerce")
@@ -40,6 +42,8 @@ def clean_dealers(df):
         df["total_dse"] = pd.to_numeric(df["total_dse"], errors="coerce").fillna(0).astype(int)
     if "client_name" in df.columns:
         df["client_name"] = df["client_name"].astype(str).str.strip()
+    if "business_type" in df.columns:
+        df["business_type"] = df["business_type"].astype(str).str.strip().str.title()
     return df
 
 def _find_combined_latlong_col(df):
@@ -183,6 +187,8 @@ else:
 avail_df = df_dealer.copy()
 if "id_dealer_outlet" in avail_df.columns:
     avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce")
+if "business_type" in avail_df.columns:
+    avail_df = avail_df[avail_df["business_type"].str.lower()=="car"]
 if not location_detail.empty and "City" in location_detail.columns and "Cluster" in location_detail.columns:
     ld = location_detail.rename(columns={"City":"city","Cluster":"cluster"})
     avail_df = avail_df.merge(ld[["city","cluster"]], on="city", how="left")
