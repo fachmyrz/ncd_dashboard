@@ -42,24 +42,30 @@ def clean_dealers(df):
         df["client_name"] = df["client_name"].astype(str).str.strip()
     return df
 
+def _find_combined_latlong_col(df):
+    cols = list(df.columns)
+    for i,c in enumerate(cols):
+        cl = str(c).lower()
+        if ("lat" in cl and "long" in cl) or "latlong" in cl or "latitude" in cl and "longitude" in cl or "&" in cl and "lat" in cl:
+            return i, c
+    return None, None
+
 def clean_visits(df):
+    if df is None:
+        return pd.DataFrame()
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
     colmap = {}
     for c in df.columns:
         cl = c.lower()
-        if cl in ["tanggal datang","tanggal_datang","date","visit date","visited at","tanggal","tanggal datang"]:
+        if cl in ["tanggal datang","tanggal_datang","date","visit date","visited at","tanggal"]:
             colmap[c] = "visit_datetime"
-        if cl in ["nama klien","client_name","client name","nama_klien","nama klien"]:
+        if cl in ["nama klien","client_name","client name","nama_klien"]:
             colmap[c] = "client_name"
-        if cl in ["nama karyawan","employee name","bde","bde name","nama_karyawan","nama karyawan"]:
+        if cl in ["nama karyawan","employee name","bde","bde name","nama_karyawan"]:
             colmap[c] = "employee_name"
-        if cl in ["nomor induk karyawan","nik","employee_id","nomor_induk_karyawan","nomor induk karyawan"]:
+        if cl in ["nomor induk karyawan","nik","employee_id","nomor_induk_karyawan"]:
             colmap[c] = "employee_id"
-        if "latitude" in cl and "longitude" in cl:
-            colmap[c] = "latlong"
-        if cl in ["latitude & longitude datang","latlong datang","latlong_datang","latitude_longitude"]:
-            colmap[c] = "latlong"
     df = df.rename(columns=colmap)
     if "visit_datetime" in df.columns:
         df["visit_datetime"] = pd.to_datetime(df["visit_datetime"], errors="coerce")
@@ -69,32 +75,46 @@ def clean_visits(df):
         df["client_name"] = df["client_name"].astype(str).str.strip()
     if "employee_id" in df.columns:
         df = df[~df["employee_id"].astype(str).str.contains("deleted-", na=False)]
-    if "latlong" in df.columns:
-        def parse_ll(x):
-            try:
-                s = str(x).strip()
-                s = s.replace("(", "").replace(")", "")
-                parts = [p.strip() for p in s.split(",") if p.strip() != ""]
-                if len(parts) >= 2:
-                    lat = float(parts[0])
-                    lon = float(parts[1])
-                    return lat, lon
-            except:
-                return np.nan, np.nan
-            return np.nan, np.nan
-        parsed = df["latlong"].apply(parse_ll).tolist()
-        latitudes = [t[0] for t in parsed]
-        longitudes = [t[1] for t in parsed]
-        df["latitude"] = latitudes
-        df["longitude"] = longitudes
+    lat_col = None
+    lon_col = None
+    for c in df.columns:
+        cl = c.lower()
+        if cl in ["latitude","lat"] and lat_col is None:
+            lat_col = c
+        if cl in ["longitude","long","lon"] and lon_col is None:
+            lon_col = c
+    if lat_col and lon_col:
+        df["latitude"] = pd.to_numeric(df[lat_col].astype(str).str.replace(",", "").str.strip(), errors="coerce")
+        df["longitude"] = pd.to_numeric(df[lon_col].astype(str).str.replace(",", "").str.strip(), errors="coerce")
     else:
-        if "latitude" in df.columns:
-            df["latitude"] = pd.to_numeric(df["latitude"].astype(str).str.replace(",", ""), errors="coerce")
-        if "longitude" in df.columns:
-            df["longitude"] = pd.to_numeric(df["longitude"].astype(str).str.replace(",", ""), errors="coerce")
+        idx, combined = _find_combined_latlong_col(df)
+        if combined is not None:
+            s = df.iloc[:, idx].astype(str)
+            def parse_ll(x):
+                try:
+                    s = str(x).strip()
+                    s = s.replace("(", "").replace(")", "")
+                    parts = [p.strip() for p in s.split(",") if p.strip()!=""]
+                    if len(parts) >= 2:
+                        lat = float(parts[0])
+                        lon = float(parts[1])
+                        return lat, lon
+                except:
+                    return np.nan, np.nan
+                return np.nan, np.nan
+            parsed = s.apply(parse_ll)
+            latitudes = [t[0] if isinstance(t, tuple) else np.nan for t in parsed.tolist()]
+            longitudes = [t[1] if isinstance(t, tuple) else np.nan for t in parsed.tolist()]
+            df["latitude"] = pd.to_numeric(pd.Series(latitudes, index=df.index), errors="coerce")
+            df["longitude"] = pd.to_numeric(pd.Series(longitudes, index=df.index), errors="coerce")
+        else:
+            df["latitude"] = pd.to_numeric(df.get("latitude", pd.Series([np.nan]*len(df), index=df.index)).astype(str).str.replace(",", ""), errors="coerce")
+            df["longitude"] = pd.to_numeric(df.get("longitude", pd.Series([np.nan]*len(df), index=df.index)).astype(str).str.replace(",", ""), errors="coerce")
     return df
 
 def clean_orders(df):
+    if df is None:
+        return pd.DataFrame()
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
     colmap = {}
@@ -120,6 +140,8 @@ df_visits = clean_visits(df_visits_raw)
 sales_orders = clean_orders(sales_orders)
 
 def compute_visit_metrics(visits):
+    if visits is None or visits.empty:
+        return pd.DataFrame(columns=["client_name","visits_last_90","last_visit_datetime","last_visited_by","avg_weekly_visits"])
     v = visits.dropna(subset=["client_name"]).copy()
     v = v[~v["client_name"].astype(str).str.strip().eq("")]
     v["visit_date"] = v["visit_datetime"].dt.date
@@ -127,6 +149,8 @@ def compute_visit_metrics(visits):
     window_days = 90
     since = today - pd.Timedelta(days=window_days)
     recent = v[v["visit_datetime"] >= since]
+    if recent.empty:
+        return pd.DataFrame(columns=["client_name","visits_last_90","last_visit_datetime","last_visited_by","avg_weekly_visits"])
     agg = recent.groupby("client_name").agg(visits_last_90=("visit_datetime","count"), last_visit_datetime=("visit_datetime","max")).reset_index()
     if "employee_name" in v.columns:
         idx = v.groupby("client_name")["visit_datetime"].idxmax()
