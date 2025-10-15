@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from math import radians, sin, cos, sqrt, atan2
 from difflib import get_close_matches
-from data_load import df_dealer, df_visit, sales_data, running_order, location_detail, cluster_left
+from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
 
 def clean_dealers(df):
     df = df.copy()
@@ -47,7 +47,7 @@ def clean_dealers(df):
 def _parse_combined_ll(s):
     try:
         s = str(s).strip()
-        s = s.replace("(", "").replace(")", "")
+        s = s.replace("(","").replace(")","")
         parts = [p.strip() for p in s.split(",") if p.strip()!=""]
         if len(parts) >= 2:
             lat = float(parts[0])
@@ -67,10 +67,7 @@ def clean_visits(df):
     for c in df.columns:
         cl = c.lower()
         if "tanggal" in cl or "date" in cl or "visit" in cl:
-            if "time" in cl or "datetime" in cl:
-                colmap[c] = "visit_datetime"
-            else:
-                colmap[c] = "visit_datetime"
+            colmap[c] = "visit_datetime"
         if "nama klien" in cl or ("client" in cl and "name" in cl) or "nama_klien" in cl:
             colmap[c] = "client_name"
         if "nama karyawan" in cl or ("employee" in cl and "name" in cl) or "bde" in cl:
@@ -104,7 +101,7 @@ def clean_visits(df):
     else:
         found = False
         for c in df.columns:
-            if "lat" in c.lower() and "long" in c.lower() or "latlong" in c.lower() or ("latitude" in c.lower() and "longitude" in c.lower()):
+            if "lat" in c.lower() and "long" in c.lower() or "latlong" in c.lower():
                 parsed = df[c].astype(str).apply(_parse_combined_ll)
                 df["latitude"] = pd.to_numeric(pd.Series([t[0] for t in parsed], index=df.index), errors="coerce")
                 df["longitude"] = pd.to_numeric(pd.Series([t[1] for t in parsed], index=df.index), errors="coerce")
@@ -151,8 +148,8 @@ def haversine_km(lat1, lon1, lat2_arr, lon2_arr):
     return R * c
 
 df_dealer = clean_dealers(df_dealer) if 'df_dealer' in globals() else pd.DataFrame()
-df_visit = clean_visits(df_visit) if 'df_visit' in globals() else pd.DataFrame()
-sales_orders = clean_orders(sales_data) if 'sales_data' in globals() else pd.DataFrame()
+df_visits = clean_visits(df_visits_raw) if 'df_visits_raw' in globals() else pd.DataFrame()
+sales_orders = clean_orders(sales_orders) if 'sales_orders' in globals() else pd.DataFrame()
 
 def assign_visits_to_dealers(visits, dealers, max_km=1.0):
     if visits is None or visits.empty:
@@ -174,7 +171,7 @@ def assign_visits_to_dealers(visits, dealers, max_km=1.0):
             cl = cn.lower()
             if cl in dealers_idx["client_lower"].values:
                 return dealers_idx.loc[dealers_idx["client_lower"]==cl, "client_name"].iloc[0]
-            close = get_close_matches(cl, dealer_names, n=1, cutoff=0.85)
+            close = get_close_matches(cl, dealer_names, n=1, cutoff=0.80)
             if close:
                 return dealers_idx.loc[dealers_idx["client_lower"]==close[0], "client_name"].iloc[0]
         try:
@@ -197,7 +194,7 @@ def assign_visits_to_dealers(visits, dealers, max_km=1.0):
     visits["client_name_assigned"] = visits["client_name_assigned"].where(visits["client_name_assigned"].notna(), None)
     return visits
 
-df_visit = assign_visits_to_dealers(df_visit, df_dealer, max_km=1.0)
+df_visits = assign_visits_to_dealers(df_visits, df_dealer, max_km=1.0)
 
 def compute_visit_metrics(visits, window_days=90):
     if visits is None or visits.empty:
@@ -220,7 +217,7 @@ def compute_visit_metrics(visits, window_days=90):
     agg["avg_weekly_visits"] = (agg["visits_last_N"] / (window_days/7)).round(2)
     return agg
 
-visit_metrics = compute_visit_metrics(df_visit, window_days=90)
+visit_metrics = compute_visit_metrics(df_visits, window_days=90)
 
 if not sales_orders.empty:
     sales_orders["month"] = sales_orders["order_date"].dt.to_period("M").astype(str)
@@ -235,7 +232,7 @@ else:
 run = running_order.copy() if 'running_order' in globals() else pd.DataFrame()
 if not run.empty:
     run.columns = [c.strip() for c in run.columns]
-    run_ = run.rename(columns={c:c.strip() for c in run.columns})
+    run_ = run
     id_col = None
     for c in run_.columns:
         if "dealer" in c.lower() and "id" in c.lower():
@@ -328,3 +325,29 @@ if 'cluster_left' in globals() and not cluster_left.empty:
         avail_df_merge = avail_df_merge.merge(cl[["cluster","brand","daily_gen","daily_need","delta","availability"]], on=["cluster","brand"], how="left")
 else:
     avail_df_merge["availability"] = avail_df_merge.get("availability", "Potential")
+
+try:
+    df_visit
+except NameError:
+    if "df_visits" in globals():
+        df_visit = df_visits
+    elif "df_visits_raw" in globals():
+        df_visit = df_visits_raw
+    else:
+        df_visit = pd.DataFrame()
+
+try:
+    avail_df_merge
+except NameError:
+    if "avail_df" in globals() and "grouped_run_order" in globals():
+        try:
+            avail_df_merge = avail_df.merge(grouped_run_order.drop(columns=["dealer_name"], errors="ignore"), on="id_dealer_outlet", how="left")
+        except Exception:
+            avail_df_merge = avail_df.copy()
+    elif "avail_df" in globals():
+        avail_df_merge = avail_df.copy()
+    else:
+        avail_df_merge = pd.DataFrame()
+
+if "revenue_monthly" not in globals():
+    revenue_monthly = globals().get("revenue_monthly", pd.DataFrame())
