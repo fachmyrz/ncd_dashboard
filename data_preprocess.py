@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import geopy.distance
+from math import radians, sin, cos, sqrt, atan2
 from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
 
 def clean_dealers(df):
@@ -144,33 +144,53 @@ def clean_orders(df):
         df["total_paid_after_tax"] = pd.to_numeric(df["total_paid_after_tax"], errors="coerce").fillna(0.0)
     return df
 
+def haversine_km(lat1, lon1, lat2_arr, lon2_arr):
+    R = 6371.0
+    lat1_r = radians(lat1)
+    lon1_r = radians(lon1)
+    lat2_r = np.radians(lat2_arr.astype(float))
+    lon2_r = np.radians(lon2_arr.astype(float))
+    dlat = lat2_r - lat1_r
+    dlon = lon2_r - lon1_r
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1_r) * np.cos(lat2_r) * np.sin(dlon/2.0)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+    return R * c
+
 df_dealer = clean_dealers(df_dealer)
 df_visits = clean_visits(df_visits_raw)
 sales_orders = clean_orders(sales_orders)
 
 def assign_visits_to_dealers(visits, dealers, max_km=1.0):
     if visits is None or visits.empty or dealers is None or dealers.empty:
+        visits["client_name_assigned"] = visits.get("client_name", None)
         return visits
     visits = visits.copy()
     dealers_idx = dealers.dropna(subset=["latitude","longitude"])[["id_dealer_outlet","client_name","latitude","longitude"]].reset_index(drop=True)
+    if dealers_idx.empty:
+        visits["client_name_assigned"] = visits.get("client_name", None)
+        return visits
+    dealers_lat = dealers_idx["latitude"].astype(float).to_numpy()
+    dealers_lon = dealers_idx["longitude"].astype(float).to_numpy()
     def nearest_client(row):
-        if pd.isna(row.get("latitude")) or pd.isna(row.get("longitude")):
-            return None
         try:
-            lat = float(row["latitude"])
-            lon = float(row["longitude"])
+            lat = float(row.get("latitude"))
+            lon = float(row.get("longitude"))
         except:
             return None
-        dists = dealers_idx.apply(lambda r: geopy.distance.geodesic((lat,lon),(r.latitude,r.longitude)).km, axis=1)
-        if dists.empty:
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             return None
-        idx = dists.idxmin()
-        min_km = dists.loc[idx]
-        if min_km <= max_km:
-            return dealers_idx.loc[idx,"client_name"]
+        dists = haversine_km(lat, lon, dealers_lat, dealers_lon)
+        if np.all(np.isnan(dists)):
+            return None
+        idx = int(np.nanargmin(dists))
+        min_km = float(dists[idx])
+        if np.isfinite(min_km) and min_km <= max_km:
+            return dealers_idx.loc[idx, "client_name"]
         return None
-    visits["matched_client"] = visits.apply(nearest_client, axis=1)
-    visits["client_name_assigned"] = visits["client_name"].where(visits["client_name"].notna() & visits["client_name"].astype(str).str.strip().ne(""), visits["matched_client"])
+    matched = visits.apply(lambda r: nearest_client(r), axis=1)
+    visits["matched_client"] = matched
+    visits["client_name_assigned"] = visits.get("client_name")
+    visits["client_name_assigned"] = visits["client_name_assigned"].where(visits["client_name_assigned"].notna() & visits["client_name_assigned"].astype(str).str.strip().ne(""), visits["matched_client"])
     visits["client_name_assigned"] = visits["client_name_assigned"].where(visits["client_name_assigned"].notna(), None)
     return visits
 
