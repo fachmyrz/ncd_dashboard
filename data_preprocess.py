@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-import geopy.distance
 from datetime import datetime, timedelta
+import geopy.distance
 from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
 
 def clean_dealers(df):
@@ -48,17 +48,17 @@ def clean_visits(df):
     colmap = {}
     for c in df.columns:
         cl = c.lower()
-        if cl in ["tanggal datang","tanggal_datang","date","visit date","visited at","tanggal"]:
+        if cl in ["tanggal datang","tanggal_datang","date","visit date","visited at","tanggal","tanggal datang"]:
             colmap[c] = "visit_datetime"
-        if cl in ["nama klien","client_name","client name","nama_klien"]:
+        if cl in ["nama klien","client_name","client name","nama_klien","nama klien"]:
             colmap[c] = "client_name"
-        if cl in ["nama karyawan","employee name","bde","bde name","nama_karyawan"]:
+        if cl in ["nama karyawan","employee name","bde","bde name","nama_karyawan","nama karyawan"]:
             colmap[c] = "employee_name"
-        if cl in ["nomor induk karyawan","nik","employee_id","nomor_induk_karyawan"]:
+        if cl in ["nomor induk karyawan","nik","employee_id","nomor_induk_karyawan","nomor induk karyawan"]:
             colmap[c] = "employee_id"
         if "latitude" in cl and "longitude" in cl:
             colmap[c] = "latlong"
-        if cl in ["latitude & longitude datang","latlong datang","latlong_datang"]:
+        if cl in ["latitude & longitude datang","latlong datang","latlong_datang","latitude_longitude"]:
             colmap[c] = "latlong"
     df = df.rename(columns=colmap)
     if "visit_datetime" in df.columns:
@@ -71,18 +71,27 @@ def clean_visits(df):
         df = df[~df["employee_id"].astype(str).str.contains("deleted-", na=False)]
     if "latlong" in df.columns:
         def parse_ll(x):
-            s = str(x)
-            s = s.replace("(", "").replace(")", "")
-            parts = [p.strip() for p in s.split(",")]
-            if len(parts) >= 2:
-                try:
-                    return float(parts[0]), float(parts[1])
-                except:
-                    return np.nan, np.nan
+            try:
+                s = str(x).strip()
+                s = s.replace("(", "").replace(")", "")
+                parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+                if len(parts) >= 2:
+                    lat = float(parts[0])
+                    lon = float(parts[1])
+                    return lat, lon
+            except:
+                return np.nan, np.nan
             return np.nan, np.nan
-        ll = df["latlong"].apply(parse_ll)
-        df["latitude"] = ll.apply(lambda t: t[0])
-        df["longitude"] = ll.apply(lambda t: t[1])
+        parsed = df["latlong"].apply(parse_ll).tolist()
+        latitudes = [t[0] for t in parsed]
+        longitudes = [t[1] for t in parsed]
+        df["latitude"] = latitudes
+        df["longitude"] = longitudes
+    else:
+        if "latitude" in df.columns:
+            df["latitude"] = pd.to_numeric(df["latitude"].astype(str).str.replace(",", ""), errors="coerce")
+        if "longitude" in df.columns:
+            df["longitude"] = pd.to_numeric(df["longitude"].astype(str).str.replace(",", ""), errors="coerce")
     return df
 
 def clean_orders(df):
@@ -93,7 +102,7 @@ def clean_orders(df):
         cl = c.lower()
         if cl in ["dealer_id","id_dealer_outlet","dealer id","id"]:
             colmap[c] = "dealer_id"
-        if cl in ["order_date","date","tanggal order"]:
+        if cl in ["order_date","date","tanggal order","order_date"]:
             colmap[c] = "order_date"
         if cl in ["total_paid_after_tax","amount","total","grand_total"]:
             colmap[c] = "total_paid_after_tax"
@@ -167,13 +176,16 @@ avail_df_merge["total_dse"] = avail_df_merge.get("total_dse", 0).fillna(0)
 avail_df_merge["visits_last_90"] = avail_df_merge.get("visits_last_90", 0).fillna(0)
 avail_df_merge["avg_weekly_visits"] = avail_df_merge.get("avg_weekly_visits", 0).fillna(0)
 avail_df_merge["total_revenue"] = avail_df_merge.get("total_revenue", 0).fillna(0)
+
 def compute_tag(row):
-    if row["joined_dse"]==0 and row["total_dse"]==0 and row["visits_last_90"]==0:
+    if row.get("joined_dse",0)==0 and row.get("total_dse",0)==0 and row.get("visits_last_90",0)==0:
         return "Not Penetrated"
-    if row["visits_last_90"]==0:
+    if row.get("visits_last_90",0)==0:
         return "Not Active"
     return "Active"
+
 avail_df_merge["tag"] = avail_df_merge.apply(compute_tag, axis=1)
+
 if not cluster_left.empty:
     cl = cluster_left.rename(columns={"Cluster":"cluster","Brand":"brand","Daily_Gen":"daily_gen","Daily_Need":"daily_need","Delta":"delta","Tag":"availability"})
     cl["brand"] = cl["brand"].replace({"CHERY":"Chery","Kia":"KIA"})
