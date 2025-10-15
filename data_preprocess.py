@@ -230,28 +230,34 @@ else:
     avg_monthly_revenue = pd.DataFrame(columns=["dealer_id","avg_monthly_revenue"])
 
 run = running_order.copy() if 'running_order' in globals() else pd.DataFrame()
-if not run.empty:
+if isinstance(run, pd.DataFrame) and not run.empty:
     run.columns = [c.strip() for c in run.columns]
-    run_ = run
     id_col = None
-    for c in run_.columns:
+    for c in run.columns:
         if "dealer" in c.lower() and "id" in c.lower():
             id_col = c
-    if id_col:
-        run_["id_dealer_outlet"] = pd.to_numeric(run_[id_col], errors="coerce")
-    if "IsActive" in run_.columns and "End Date" in run_.columns:
-        ao = run_[run_["IsActive"].astype(str) == "1"].copy()
+            break
+    rm = run.rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name","LMS Id":"joined_dse","IsActive":"active_dse"})
+    if id_col and "id_dealer_outlet" not in rm.columns:
+        rm["id_dealer_outlet"] = pd.to_numeric(run[id_col], errors="coerce")
+    if "id_dealer_outlet" in rm.columns and not isinstance(rm["id_dealer_outlet"], pd.Series):
+        rm["id_dealer_outlet"] = pd.to_numeric(pd.Series(rm["id_dealer_outlet"]), errors="coerce")
+    if "IsActive" in run.columns and "End Date" in run.columns:
+        ao = run.copy()
+        ao = ao[ao["IsActive"].astype(str) == "1"]
         ao["End Date"] = pd.to_datetime(ao["End Date"], errors="coerce")
+        if id_col and "id_dealer_outlet" not in ao.columns:
+            ao["id_dealer_outlet"] = pd.to_numeric(ao[id_col], errors="coerce")
         ao_group = ao.groupby("id_dealer_outlet").agg(nearest_end_date=("End Date","min")).reset_index()
     else:
         ao_group = pd.DataFrame(columns=["id_dealer_outlet","nearest_end_date"])
-    rm = run_.rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name","LMS Id":"joined_dse","IsActive":"active_dse"})
-    if "id_dealer_outlet" in rm.columns:
-        rm["id_dealer_outlet"] = pd.to_numeric(rm["id_dealer_outlet"], errors="coerce")
     rm["joined_dse"] = pd.to_numeric(rm.get("joined_dse"), errors="coerce").fillna(0)
     rm["active_dse"] = pd.to_numeric(rm.get("active_dse"), errors="coerce").fillna(0)
-    grouped_run_order = rm.dropna(subset=["id_dealer_outlet"]).groupby(["id_dealer_outlet","dealer_name"]).agg(joined_dse=("joined_dse","count"), active_dse=("active_dse","sum")).reset_index()
-    grouped_run_order = grouped_run_order.merge(ao_group, how="left", on="id_dealer_outlet")
+    if "id_dealer_outlet" in rm.columns:
+        grouped_run_order = rm.dropna(subset=["id_dealer_outlet"]).groupby(["id_dealer_outlet","dealer_name"]).agg(joined_dse=("joined_dse","count"), active_dse=("active_dse","sum")).reset_index()
+        grouped_run_order = grouped_run_order.merge(ao_group, how="left", on="id_dealer_outlet")
+    else:
+        grouped_run_order = pd.DataFrame(columns=["id_dealer_outlet","dealer_name","joined_dse","active_dse","nearest_end_date"])
 else:
     grouped_run_order = pd.DataFrame(columns=["id_dealer_outlet","dealer_name","joined_dse","active_dse","nearest_end_date"])
 
@@ -260,7 +266,7 @@ if "id_dealer_outlet" in avail_df.columns:
     avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce")
 if "business_type" in avail_df.columns:
     avail_df = avail_df[avail_df["business_type"].str.lower()=="car"]
-if 'location_detail' in globals() and not location_detail.empty:
+if 'location_detail' in globals() and isinstance(location_detail, pd.DataFrame) and not location_detail.empty:
     ld = location_detail.copy()
     ld.columns = [c.strip() for c in ld.columns]
     mapcols = {}
@@ -302,7 +308,7 @@ def compute_tag(row):
 
 avail_df_merge["tag"] = avail_df_merge.apply(compute_tag, axis=1)
 
-if 'cluster_left' in globals() and not cluster_left.empty:
+if 'cluster_left' in globals() and isinstance(cluster_left, pd.DataFrame) and not cluster_left.empty:
     cl = cluster_left.copy()
     cl.columns = [c.strip() for c in cl.columns]
     mapcols = {}
