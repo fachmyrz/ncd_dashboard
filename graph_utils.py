@@ -12,9 +12,3 @@ def visits_by_employee():
         fig2 = px.bar(tmp.sort_values("avg_weekly", ascending=False), x="last_visited_by", y="avg_weekly")
         return fig1, fig2
     return None, None
-
-def revenue_trend_overall():
-    if not revenue_monthly.empty:
-        agg = revenue_monthly.groupby("month")["monthly_revenue"].sum().reset_index()
-        return px.line(agg, x="month", y="monthly_revenue", markers=True)
-    return None
