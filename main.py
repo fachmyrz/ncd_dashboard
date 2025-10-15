@@ -6,12 +6,13 @@ from PIL import Image
 import pydeck as pdk
 from pydeck.types import String
 from data_preprocess import avail_df_merge, df_visit
-from datetime import datetime
+from math import radians, sin, cos, sqrt, atan2
 st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon="assets/favicon.png", layout="wide")
 st.markdown("<h1 style='font-size:40px;margin-top:0'>Dealer Penetration Dashboard</h1>", unsafe_allow_html=True)
 jabodetabek = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
 df = avail_df_merge.copy()
-df = df[df.get("business_type","Car").str.lower()=="car"] if "business_type" in df.columns else df
+if "business_type" in df.columns:
+    df = df[df["business_type"].str.lower()=="car"]
 sales_names = sorted(list(set(df.get("sales_name", pd.Series([], dtype=str)).dropna().astype(str).tolist() + (df_visit.get("employee_name", pd.Series([], dtype=str)).dropna().astype(str).tolist() if df_visit is not None and not df_visit.empty else []))))
 brands_all = sorted(df.get("brand", pd.Series(dtype=str)).dropna().unique().tolist())
 cities_all = sorted(df.get("city", pd.Series(dtype=str)).dropna().unique().tolist())
@@ -39,7 +40,8 @@ if "All" in brand:
 button = st.button("Submit")
 if button:
     df = avail_df_merge.copy()
-    df = df[df.get("business_type","Car").str.lower()=="car"] if "business_type" in df.columns else df
+    if "business_type" in df.columns:
+        df = df[df["business_type"].str.lower()=="car"]
     if name != "All" and "sales_name" in df.columns:
         df = df[df["sales_name"].astype(str) == name]
     if penetrated:
@@ -122,3 +124,13 @@ if button:
             if not pot.empty:
                 sun = px.sunburst(pot, path=["availability","brand"], values="Total Dealers")
                 st.plotly_chart(sun, use_container_width=True, key="sun_overall")
+        with tab2:
+            table = df.copy()
+            if "client_name" in table.columns:
+                table = table.rename(columns={"client_name":"dealer_name"})
+            table_unique = table.drop_duplicates(subset=["id_dealer_outlet"]).copy()
+            display_cols = []
+            for c in ["dealer_name","brand","city","tag","joined_dse","total_dse","active_dse","avg_weekly_visits","last_visit_datetime","last_visited_by","nearest_end_date","availability"]:
+                if c in table_unique.columns:
+                    display_cols.append(c)
+            st.dataframe(table_unique[display_cols].sort_values(by="avg_weekly_visits", ascending=False).reset_index(drop=True), use_container_width=True, hide_index=True)
