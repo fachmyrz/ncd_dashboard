@@ -1,72 +1,41 @@
 import gspread
-from google.oauth2.service_account import Credentials
 import pandas as pd
-import requests
 import streamlit as st
-import json
 
-def _get_client():
-    creds = st.secrets.get("google_creds", None)
-    if creds is None:
-        return None
-    client = gspread.service_account_from_dict(creds)
-    return client
-
-def _sheet_to_df_by_key(client, key, tab):
+def _ws_to_df(client, sheet_id, tab):
     try:
-        sh = client.open_by_key(key)
+        sh = client.open_by_key(sheet_id)
         ws = sh.worksheet(tab)
-        data = ws.get_all_values()
-        if not data:
+        values = ws.get_all_values()
+        if not values:
             return pd.DataFrame()
-        cols = data[0]
-        rows = data[1:]
+        cols = values[0] if values else []
+        rows = values[1:] if len(values) > 1 else []
+        if not cols:
+            return pd.DataFrame()
         return pd.DataFrame(rows, columns=cols)
     except Exception:
         return pd.DataFrame()
 
-client = _get_client()
+scope = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
+client = gspread.service_account_from_dict(st.secrets["google_creds"])
 
-sheet_ids = st.secrets.get("sheet_ids", {})
+sid = st.secrets.get("sheet_ids", {})
 
-need_cluster = _sheet_to_df_by_key(client, sheet_ids.get("need_cluster", ""), "By Cluster")
-location_detail = _sheet_to_df_by_key(client, sheet_ids.get("location_detail", ""), "Sheet3")
-dealer_penetration = _sheet_to_df_by_key(client, sheet_ids.get("dealer_penetration", ""), "Dealers")
-sales_dashboard = _sheet_to_df_by_key(client, sheet_ids.get("sales_dashboard", ""), "NCD Sales Tracker")
-package_master = _sheet_to_df_by_key(client, sheet_ids.get("package_master", ""), "Database")
+need_cluster_id = sid.get("need_cluster", "")
+location_detail_id = sid.get("location_detail", "")
+dealer_penetration_id = sid.get("dealer_penetration", "")
+visits_id = sid.get("visits", sid.get("dealer_penetration", ""))
+orders_id = sid.get("orders", "")
+package_master_id = sid.get("package_master", "")
 
-df_dealer = dealer_penetration.copy()
-sales_data = sales_dashboard.copy()
-running_order = package_master.copy()
-cluster_left = need_cluster.copy()
-location_detail = location_detail.copy()
+cluster_left = _ws_to_df(client, need_cluster_id, "By Cluster")
+location_detail = _ws_to_df(client, location_detail_id, "Sheet3")
+df_dealer = _ws_to_df(client, dealer_penetration_id, "Dealers")
+df_visits_raw = _ws_to_df(client, visits_id, "Visits")
+sales_orders = _ws_to_df(client, orders_id, "Orders")
+running_order = _ws_to_df(client, package_master_id, "Database")
 
-kerjoo = st.secrets.get("kerjoo_creds", None)
-df_visits_raw = pd.DataFrame()
-if kerjoo:
-    token = kerjoo.get("creds") or kerjoo.get("token")
-    if token:
-        headers_visit = {
-            "accept": "application/json",
-            "Authorization": token
-        }
-        try:
-            params_visit = {"date_start": "2024-02-22"}
-            response_visit = requests.get("https://api.kerjoo.com/tenant11170/api/v1/client-visits", params=params_visit, headers=headers_visit, timeout=10)
-            if response_visit.status_code == 200:
-                j = response_visit.json()
-                df_visits_raw = pd.DataFrame(j.get("data", []))
-                if not df_visits_raw.empty:
-                    if "personnel" in df_visits_raw.columns:
-                        df_visits_raw["name_personnel"] = df_visits_raw["personnel"].apply(lambda x: x.get("name") if isinstance(x, dict) else None)
-                    if "client" in df_visits_raw.columns:
-                        df_visits_raw["client_name_raw"] = df_visits_raw["client"].apply(lambda x: x.get("name") if isinstance(x, dict) else None)
-        except Exception:
-            df_visits_raw = pd.DataFrame()
-if df_visits_raw.empty:
-    df_visits_raw = pd.DataFrame()
-
-orders_sheet_key = st.secrets.get("sheet_ids", {}).get("sales_dashboard", "")
-sales_orders = pd.DataFrame()
-if client and orders_sheet_key:
-    sales_orders = _sheet_to_df_by_key(client, orders_sheet_key, "Orders")
+with st.sidebar:
+    st.caption("Data status")
+    st.write({"cluster_left": len(cluster_left), "location_detail": len(location_detail), "dealers": len(df_dealer), "visits": len(df_visits_raw), "orders": len(sales_orders), "running_order": len(running_order)})
