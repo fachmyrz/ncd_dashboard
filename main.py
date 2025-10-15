@@ -7,7 +7,8 @@ import pydeck as pdk
 from pydeck.types import String
 from data_preprocess import avail_df_merge, df_visit
 from math import radians, sin, cos, sqrt, atan2
-st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon="assets/favicon.png", layout="wide")
+icon = Image.open("assets/favicon.png")
+st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon=icon, layout="wide")
 st.markdown("<h1 style='font-size:40px;margin-top:0'>Dealer Penetration Dashboard</h1>", unsafe_allow_html=True)
 jabodetabek = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
 df = avail_df_merge.copy()
@@ -134,3 +135,4 @@ if button:
                 if c in table_unique.columns:
                     display_cols.append(c)
             st.dataframe(table_unique[display_cols].sort_values(by="avg_weekly_visits", ascending=False).reset_index(drop=True), use_container_width=True, hide_index=True)
+
