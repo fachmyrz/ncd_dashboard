@@ -25,7 +25,7 @@ running_vals = running_order_ws.get_all_values()
 cluster_left = pd.DataFrame(nc_vals[1:], columns=nc_vals[0]) if nc_vals else pd.DataFrame()
 location_detail = pd.DataFrame(ld_vals[1:], columns=ld_vals[0]) if ld_vals else pd.DataFrame()
 df_dealer = pd.DataFrame(dealers_vals[1:], columns=dealers_vals[0]) if dealers_vals else pd.DataFrame()
-df_visits_raw = pd.DataFrame(visits_vals[1:], columns=visits_vals[0]) if visits_vals else pd.DataFrame()
+df_visit = pd.DataFrame(visits_vals[1:], columns=visits_vals[0]) if visits_vals else pd.DataFrame()
 sales_orders = pd.DataFrame(orders_vals[1:], columns=orders_vals[0]) if orders_vals else pd.DataFrame()
 running_order = pd.DataFrame(running_vals[1:], columns=running_vals[0]) if running_vals else pd.DataFrame()
 
