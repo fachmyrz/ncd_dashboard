@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from data_preprocess import *
 import streamlit as st
+from PIL import Image
 import pydeck as pdk
 from pydeck.types import String
 
@@ -11,6 +12,8 @@ sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrul
 jabodetabek = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
 
 st.title("Filter for Recommendation")
+icon = Image.open("assets/favicon.png")
+st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon=icon, layout="wide")
 
 with st.container(border=True):
     name = st.selectbox("BDE Name ",['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Ahlan','Samin Jaya'])
@@ -170,3 +173,4 @@ if button and name != "" and penetrated != "" and potential != "" and city_pick 
                         st.info("No areas to display.")
                     else:
                         some_output(area_label)
+
