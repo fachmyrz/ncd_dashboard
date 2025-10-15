@@ -7,13 +7,13 @@ import streamlit as st
 import pydeck as pdk
 from pydeck.types import String
 
-sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Achlan','Samin Jaya']
+sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Ahlan','Samin Jaya']
 jabodetabek = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
 
 st.title("Filter for Recommendation")
 
 with st.container(border=True):
-    name = st.selectbox("BDE Name ",['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Achlan','Samin Jaya'])
+    name = st.selectbox("BDE Name ",['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Ahlan','Samin Jaya'])
     cols1 = st.columns(2)
     with cols1[0]:
         penetrated = st.multiselect("Dealer Activity",['All','Not Active','Not Penetrated','Active'])
@@ -152,15 +152,15 @@ if button and name != "" and penetrated != "" and potential != "" and city_pick 
                 with col1:
                     if fig is not None:
                         st.markdown("#### Dealer Penetration")
-                        st.plotly_chart(fig)
+                        st.plotly_chart(fig, key=f"bar_{area}")
                 with col2:
                     if fig1 is not None:
                         st.markdown("#### Potential Dealer")
-                        st.plotly_chart(fig1)
+                        st.plotly_chart(fig1, key=f"sun_{area}")
                 if not df_output.empty:
-                    df_output = df_output.rename(columns={'brand':'Brand','name':'Name','city':'City','tag':'Activity','joined_dse':'Total Joined DSE','active_dse':'Total Active DSE','nearest_end_date':'Nearest Package End Date','availability':'Availability'})
+                    df_shown = df_output.rename(columns={'brand':'Brand','name':'Name','city':'City','tag':'Activity','joined_dse':'Total Joined DSE','active_dse':'Total Active DSE','nearest_end_date':'Nearest Package End Date','availability':'Availability'})
                     st.markdown("### Dealers Details")
-                    st.dataframe(df_output.reset_index(drop=True))
+                    st.dataframe(df_shown.reset_index(drop=True), key=f"tbl_{area}")
             st.title("Dealers Detail")
             tab_labels = cluster_center['word_pick'].dropna().unique().tolist()
             tab_labels.sort()
