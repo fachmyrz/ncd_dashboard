@@ -30,5 +30,5 @@ def fig_top_revenue_dealers(n=10):
     tmp = tmp.head(n)
     if tmp.empty:
         return None
-    fig = px.bar(tmp, x="client_name", y="avg_monthly_revenue", hover_data=["brand","city"], title=f"Top {n} Dealers by Avg Monthly Revenue")
+    fig = px.bar(tmp, x="dealer_name" if "dealer_name" in tmp.columns else "client_name", y="avg_monthly_revenue", hover_data=["brand","city"], title=f"Top {n} Dealers by Avg Monthly Revenue")
     return fig
