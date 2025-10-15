@@ -50,7 +50,7 @@ def _find_combined_latlong_col(df):
     cols = list(df.columns)
     for i,c in enumerate(cols):
         cl = str(c).lower()
-        if ("lat" in cl and "long" in cl) or "latlong" in cl or "latitude" in cl and "longitude" in cl or "&" in cl and "lat" in cl:
+        if ("lat" in cl and "long" in cl) or "latlong" in cl or ("latitude" in cl and "longitude" in cl) or ("&" in cl and "lat" in cl):
             return i, c
     return None, None
 
@@ -60,6 +60,7 @@ def clean_visits(df):
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
     colmap = {}
+    div_col = None
     for c in df.columns:
         cl = c.lower()
         if cl in ["tanggal datang","tanggal_datang","date","visit date","visited at","tanggal"]:
@@ -70,6 +71,8 @@ def clean_visits(df):
             colmap[c] = "employee_name"
         if cl in ["nomor induk karyawan","nik","employee_id","nomor_induk_karyawan"]:
             colmap[c] = "employee_id"
+        if "divisi" in cl or "division" in cl:
+            div_col = c
     df = df.rename(columns=colmap)
     if "visit_datetime" in df.columns:
         df["visit_datetime"] = pd.to_datetime(df["visit_datetime"], errors="coerce")
@@ -79,6 +82,8 @@ def clean_visits(df):
         df["client_name"] = df["client_name"].astype(str).str.strip()
     if "employee_id" in df.columns:
         df = df[~df["employee_id"].astype(str).str.contains("deleted-", na=False)]
+    if div_col:
+        df = df[~df[div_col].astype(str).str.lower().eq("trainer")]
     lat_col = None
     lon_col = None
     for c in df.columns:
@@ -143,10 +148,40 @@ df_dealer = clean_dealers(df_dealer)
 df_visits = clean_visits(df_visits_raw)
 sales_orders = clean_orders(sales_orders)
 
+def assign_visits_to_dealers(visits, dealers, max_km=1.0):
+    if visits is None or visits.empty or dealers is None or dealers.empty:
+        return visits
+    visits = visits.copy()
+    dealers_idx = dealers.dropna(subset=["latitude","longitude"])[["id_dealer_outlet","client_name","latitude","longitude"]].reset_index(drop=True)
+    def nearest_client(row):
+        if pd.isna(row.get("latitude")) or pd.isna(row.get("longitude")):
+            return None
+        try:
+            lat = float(row["latitude"])
+            lon = float(row["longitude"])
+        except:
+            return None
+        dists = dealers_idx.apply(lambda r: geopy.distance.geodesic((lat,lon),(r.latitude,r.longitude)).km, axis=1)
+        if dists.empty:
+            return None
+        idx = dists.idxmin()
+        min_km = dists.loc[idx]
+        if min_km <= max_km:
+            return dealers_idx.loc[idx,"client_name"]
+        return None
+    visits["matched_client"] = visits.apply(nearest_client, axis=1)
+    visits["client_name_assigned"] = visits["client_name"].where(visits["client_name"].notna() & visits["client_name"].astype(str).str.strip().ne(""), visits["matched_client"])
+    visits["client_name_assigned"] = visits["client_name_assigned"].where(visits["client_name_assigned"].notna(), None)
+    return visits
+
+df_visits = assign_visits_to_dealers(df_visits, df_dealer, max_km=1.0)
+
 def compute_visit_metrics(visits):
     if visits is None or visits.empty:
         return pd.DataFrame(columns=["client_name","visits_last_90","last_visit_datetime","last_visited_by","avg_weekly_visits"])
-    v = visits.dropna(subset=["client_name"]).copy()
+    v = visits.copy()
+    v["client_name"] = v.get("client_name_assigned", v.get("client_name"))
+    v = v.dropna(subset=["client_name"])
     v = v[~v["client_name"].astype(str).str.strip().eq("")]
     v["visit_date"] = v["visit_datetime"].dt.date
     today = pd.to_datetime(datetime.utcnow().date())
@@ -169,9 +204,11 @@ if not sales_orders.empty:
     sales_orders["month"] = sales_orders["order_date"].dt.to_period("M").astype(str)
     revenue_monthly = sales_orders.groupby(["dealer_id","month"]).agg(monthly_revenue=("total_paid_after_tax","sum")).reset_index()
     revenue_total = sales_orders.groupby("dealer_id").agg(total_revenue=("total_paid_after_tax","sum")).reset_index()
+    avg_monthly_revenue = revenue_monthly.groupby("dealer_id")["monthly_revenue"].mean().reset_index().rename(columns={"monthly_revenue":"avg_monthly_revenue"})
 else:
     revenue_monthly = pd.DataFrame(columns=["dealer_id","month","monthly_revenue"])
     revenue_total = pd.DataFrame(columns=["dealer_id","total_revenue"])
+    avg_monthly_revenue = pd.DataFrame(columns=["dealer_id","avg_monthly_revenue"])
 
 run = running_order.copy() if running_order is not None else pd.DataFrame()
 if not run.empty:
@@ -198,6 +235,8 @@ else:
 avail_df_merge = avail_df.merge(grouped_run_order.drop(columns=["dealer_name"], errors="ignore"), on="id_dealer_outlet", how="left")
 vm = visit_metrics.rename(columns={"client_name":"client_name"})
 avail_df_merge = avail_df_merge.merge(vm, on="client_name", how="left")
+amr = avg_monthly_revenue.rename(columns={"dealer_id":"id_dealer_outlet"})
+avail_df_merge = avail_df_merge.merge(amr, on="id_dealer_outlet", how="left")
 rt = revenue_total.rename(columns={"dealer_id":"id_dealer_outlet"})
 avail_df_merge = avail_df_merge.merge(rt, on="id_dealer_outlet", how="left")
 avail_df_merge["joined_dse"] = avail_df_merge.get("joined_dse", 0).fillna(0)
@@ -205,6 +244,7 @@ avail_df_merge["active_dse"] = avail_df_merge.get("active_dse", 0).fillna(0)
 avail_df_merge["total_dse"] = avail_df_merge.get("total_dse", 0).fillna(0)
 avail_df_merge["visits_last_90"] = avail_df_merge.get("visits_last_90", 0).fillna(0)
 avail_df_merge["avg_weekly_visits"] = avail_df_merge.get("avg_weekly_visits", 0).fillna(0)
+avail_df_merge["avg_monthly_revenue"] = avail_df_merge.get("avg_monthly_revenue", 0).fillna(0)
 avail_df_merge["total_revenue"] = avail_df_merge.get("total_revenue", 0).fillna(0)
 
 def compute_tag(row):
