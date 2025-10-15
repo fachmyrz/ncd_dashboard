@@ -1,144 +1,177 @@
-import streamlit as st
-from PIL import Image
 import pandas as pd
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from data_preprocess import *
+import streamlit as st
 import pydeck as pdk
-from data_preprocess import avail_df_merge, df_visit
+from pydeck.types import String
+from PIL import Image
 
 icon = Image.open("assets/favicon.png")
 st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon=icon, layout="wide")
 
-st.markdown("<style>h1, .st-emotion-cache-10trblm {font-size:40px !important}</style>", unsafe_allow_html=True)
-st.title("Dealer Penetration Dashboard")
+sales_jabo = ["A. Sofyan","Nova Handoyo","Heriyanto","Aditya rifat","Mikha Dio Arneta","Fahmi Farhan"]
+jabodetabek = ["Bekasi","Bogor","Depok","Jakarta Barat","Jakarta Pusat","Jakarta Selatan","Jakarta Timur","Jakarta Utara","Tangerang","Tangerang Selatan","Cibitung","Tambun","Cikarang","Karawaci","Alam Sutera","Cileungsi","Sentul","Cibubur","Bintaro"]
 
-df = avail_df_merge.copy()
-df = df.dropna(subset=["latitude","longitude"])
-df = df[~df["latitude"].isna() & ~df["longitude"].isna()]
-df = df.drop_duplicates(subset=["id_dealer_outlet"])
-
-areas = ["Jabodetabek","Regional","All"]
-bde_list = sorted([x for x in df_visit.get("employee_name", pd.Series([], dtype=str)).dropna().unique().tolist() if x])
-brands = sorted([x for x in df.get("brand", pd.Series([], dtype=str)).dropna().unique().tolist() if x])
-cities_all = sorted([x for x in df.get("city", pd.Series([], dtype=str)).dropna().unique().tolist() if x])
+st.title("Filter for Recommendation")
 
 with st.container(border=True):
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        area = st.selectbox("Area", areas, index=0)
-    with c2:
-        bde = st.multiselect("BDE Name", ["All"] + bde_list, default=["All"])
-    with c3:
-        radius = st.slider("Radius (km) for insights", 0, 50, 15)
-    c4, c5, c6 = st.columns(3)
-    with c4:
-        activity = st.multiselect("Dealer Activity", ["All","Active","Not Active","Not Penetrated"], default=["All"])
-    with c5:
-        availability = st.multiselect("Dealer Availability", ["All","Potential","Low Generation","Deficit"], default=["All"])
-    with c6:
-        if area == "Jabodetabek":
-            cities = sorted(df.loc[df["cluster"]=="Jabodetabek","city"].dropna().unique().tolist())
-        elif area == "Regional":
-            cities = sorted(df.loc[df["cluster"]!="Jabodetabek","city"].dropna().unique().tolist())
+    name = st.selectbox("BDE Name ", sorted(sum_df["sales_name"].dropna().unique().tolist()) if not sum_df.empty else ["A. Sofyan","Nova Handoyo","Heriyanto","Aditya rifat","Mikha Dio Arneta","Fahmi Farhan"])
+    cols1 = st.columns(2)
+    with cols1[0]:
+        penetrated = st.multiselect("Dealer Activity", ["All","Not Active","Not Penetrated","Active"], default=["All"])
+        if "All" in penetrated:
+            penetrated = ["Not Active","Not Penetrated","Active"]
+        radius = st.slider("Choose Radius", 0, 50, 15)
+    with cols1[1]:
+        potential = st.multiselect("Dealer Availability", ["All","Potential","Low Generation","Deficit"], default=["All"])
+        if "All" in potential:
+            potential = ["Potential","Low Generation","Deficit"]
+        if name in sales_jabo:
+            jabo = list(avail_df_merge[(avail_df_merge.sales_name == name) & (avail_df_merge.city.isin(jabodetabek))]["city"].dropna().unique())
+            jabo = ["All"] + jabo
+            city_pick = st.multiselect("Choose City", jabo, default=["All"])
+            if "All" in city_pick:
+                city_pick = jabo[1:] if len(jabo) > 1 else []
         else:
-            cities = cities_all
-        city_pick = st.multiselect("City", ["All"] + cities, default=["All"])
-    brand = st.multiselect("Brand", ["All"] + brands, default=["All"])
-    button = st.button("Apply")
+            regional = list(avail_df_merge[(avail_df_merge.sales_name == name) & (~avail_df_merge.city.isin(jabodetabek))]["city"].dropna().unique())
+            regional = ["All"] + regional
+            city_pick = st.multiselect("Choose City", regional, default=["All"])
+            if "All" in city_pick:
+                city_pick = regional[1:] if len(regional) > 1 else []
 
-if button:
-    dff = df.copy()
-    if area != "All":
-        dff = dff[dff["cluster"].fillna("Regional").eq(area)]
-    if "All" not in bde:
-        last_by = dff.get("last_visited_by")
-        if last_by is not None:
-            dff = dff[last_by.isin(bde)]
-        else:
-            dff = dff.iloc[0:0]
-    if "All" not in activity:
-        dff = dff[dff["tag"].isin(activity)]
-    if "All" not in availability:
-        dff = dff[dff["availability"].isin(availability)]
-    if "All" not in city_pick:
-        dff = dff[dff["city"].isin(city_pick)]
-    if "All" not in brand:
-        dff = dff[dff["brand"].isin(brand)]
+    brand_choose = list(avail_df_merge[(avail_df_merge.sales_name == name) & (avail_df_merge.city.isin(jabodetabek)) & (avail_df_merge.city.isin(city_pick)) & (avail_df_merge.tag.isin(penetrated)) & (avail_df_merge.availability.isin(potential))]["brand"].dropna().unique())
+    brand_choose = ["All"] + brand_choose
+    brand = st.multiselect("Choose Brand", brand_choose, default=["All"])
+    if "All" in brand:
+        brand = brand_choose[1:] if len(brand_choose) > 1 else []
 
-    total_dealers = int(dff["id_dealer_outlet"].nunique())
-    active_dealers = int(dff.loc[dff["active_dse"]>0,"id_dealer_outlet"].nunique())
-    active_dse = int(dff["active_dse"].fillna(0).sum())
-    avg_weekly = round(dff["avg_weekly_visits"].fillna(0).mean(), 2) if not dff.empty else 0.0
+    button = st.button("Submit")
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Dealers", f"{total_dealers}")
-    k2.metric("Active Dealers", f"{active_dealers}")
-    k3.metric("Active DSE", f"{active_dse}")
-    k4.metric("Avg Weekly Visits", f"{avg_weekly}")
-
-    if dff.empty:
-        st.info("No data for the selected filters.")
+if button and name:
+    pick_avail_lst = []
+    clusters = sum_df[sum_df.sales_name == name]["cluster"].dropna().unique().tolist()
+    for i in range(len(clusters)):
+        col = f"dist_center_{i}"
+        if col in avail_df_merge.columns:
+            temp_pick = avail_df_merge[(avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == name)].copy()
+            if not temp_pick.empty:
+                temp_pick["cluster_labels"] = i
+                pick_avail_lst.append(temp_pick)
+    if not pick_avail_lst:
+        st.info(f"No dealers found within {radius} km.")
     else:
-        center_lon = float(dff["longitude"].astype(float).mean())
-        center_lat = float(dff["latitude"].astype(float).mean())
+        pick_avail = pd.concat(pick_avail_lst, ignore_index=True)
+        drop_cols = [f"dist_center_{i}" for i in range(len(sum_df["cluster"].dropna().unique())) if f"dist_center_{i}" in pick_avail.columns]
+        if drop_cols:
+            pick_avail.drop(columns=drop_cols, inplace=True, errors="ignore")
+        pick_avail["joined_dse"] = pick_avail["joined_dse"].fillna(0)
+        pick_avail["active_dse"] = pick_avail["active_dse"].fillna(0)
+        pick_avail["tag"] = np.where((pick_avail["joined_dse"] == 0) & (pick_avail["active_dse"] == 0), "Not Penetrated", pick_avail["tag"])
+        pick_avail["nearest_end_date"] = pick_avail["nearest_end_date"].astype(str)
+        pick_avail["nearest_end_date"] = np.where(pick_avail["nearest_end_date"] == "NaT", "No Package Found", pick_avail["nearest_end_date"])
+        if name in sales_jabo:
+            pick_avail = pick_avail[pick_avail["cluster"] == "Jabodetabek"]
+        else:
+            pick_avail = pick_avail[pick_avail["cluster"] != "Jabodetabek"]
+        if city_pick and potential and penetrated:
+            pick_avail_filter = pick_avail[(pick_avail["city"].isin(city_pick)) & (pick_avail["availability"].isin(potential)) & (pick_avail["tag"].isin(penetrated)) & (pick_avail["brand"].isin(brand if brand else pick_avail["brand"].unique()))]
+        else:
+            pick_avail_filter = pick_avail
+        dealer_rec = pick_avail_filter.copy()
+        if dealer_rec.empty:
+            st.info(f"No dealers match the filters within {radius} km.")
+        else:
+            dealer_rec = dealer_rec.sort_values(["cluster_labels","delta","latitude","longitude"], ascending=False)
+            cluster_center = clust_df[clust_df.sales_name == name].copy()
+            count_visit_cluster = sum_df[sum_df.sales_name == name][["cluster","sales_name"]].groupby("cluster").count().reset_index().rename(columns={"sales_name":"count_visit"})
+            cluster_center = pd.merge(cluster_center, count_visit_cluster, on="cluster", how="left")
+            total_visits = max(cluster_center["count_visit"].fillna(0).sum(), 1)
+            cluster_center["size"] = cluster_center["count_visit"].fillna(0) / total_visits * 9000
+            cluster_center["area_tag"] = cluster_center["cluster"].astype(int) + 1
+            cluster_center["word"] = "Area " + cluster_center["area_tag"].astype(str) + "\nCount Visit: " + cluster_center["count_visit"].fillna(0).astype(int).astype(str)
+            cluster_center["word_pick"] = "Area " + cluster_center["area_tag"].astype(str)
+            dealer_rec["area_tag"] = dealer_rec["cluster_labels"].astype(int) + 1
+            dealer_rec["area_tag_word"] = "Area " + dealer_rec["area_tag"].astype(str)
 
-        def engagement_bucket(r):
-            if r.get("active_dse",0) > 0:
-                return "Active"
-            if r.get("visits_last_N",0) == 0 and r.get("joined_dse",0) == 0:
-                return "Not Penetrated"
-            if r.get("visits_last_N",0) == 0:
-                return "Not Active"
-            return "Active"
-
-        dff["engagement_bucket"] = dff.apply(engagement_bucket, axis=1)
-        color_map = {
-            "Active":[21,255,87,200],
-            "Not Active":[255,171,171,200],
-            "Not Penetrated":[131,201,255,200]
-        }
-        dff["color"] = dff["engagement_bucket"].map(color_map)
-        dff["color"] = dff["color"].apply(lambda x: x if isinstance(x, list) else [200,200,200,180])
-
-        st.subheader("Penetration Map")
-        st.pydeck_chart(
-            pdk.Deck(
-                map_style=None,
-                initial_view_state=pdk.ViewState(
-                    longitude=center_lon,
-                    latitude=center_lat,
-                    zoom=10 if area=="Jabodetabek" else 7,
-                    pitch=45
-                ),
-                tooltip={"text":"Dealer: {name}\nBrand: {brand}\nAvailability: {availability}\nActivity: {engagement_bucket}\nNearest End: {nearest_end_date}"},
-                layers=[
-                    pdk.Layer(
-                        "HexagonLayer",
-                        data=dff,
-                        get_position="[longitude, latitude]",
-                        radius=2000 if area!="Jabodetabek" else 1200,
-                        elevation_scale=4,
-                        elevation_range=[0,1000],
-                        pickable=True,
-                        extruded=True
+            st.title("Penetration Map")
+            st.pydeck_chart(
+                pdk.Deck(
+                    map_style=None,
+                    initial_view_state=pdk.ViewState(
+                        longitude=float(cluster_center["longitude"].mean()),
+                        latitude=float(cluster_center["latitude"].mean()),
+                        zoom=10,
+                        pitch=50
                     ),
-                    pdk.Layer(
-                        "ScatterplotLayer",
-                        data=dff,
-                        get_position="[longitude, latitude]",
-                        get_radius=200,
-                        get_color="color",
-                        pickable=True,
-                        auto_highlight=True,
-                        id="dealer"
-                    )
-                ]
+                    tooltip={"text":"Dealer Name: {name}\nBrand: {brand}\nAvailability: {availability}\nPenetration: {tag}"},
+                    layers=[
+                        pdk.Layer(
+                            "TextLayer",
+                            data=cluster_center,
+                            get_position="[longitude,latitude]",
+                            get_text="word",
+                            get_size=12,
+                            get_color=[0, 1000, 0],
+                            get_angle=0,
+                            get_text_anchor=String("middle"),
+                            get_alignment_baseline=String("center")
+                        ),
+                        pdk.Layer(
+                            "ScatterplotLayer",
+                            data=dealer_rec,
+                            get_position="[longitude,latitude]",
+                            get_radius=200,
+                            get_color="[21, 255, 87, 200]",
+                            id="dealer",
+                            pickable=True,
+                            auto_highlight=True
+                        ),
+                        pdk.Layer(
+                            "ScatterplotLayer",
+                            data=cluster_center,
+                            get_position="[longitude,latitude]",
+                            get_radius="size",
+                            get_color="[200, 30, 0, 90]"
+                        ),
+                    ]
+                )
             )
-        )
 
-        st.subheader("Dealers Detail")
-        table = dff[[
-            "id_dealer_outlet","client_name","name","brand","city","cluster","availability","engagement_bucket","joined_dse","active_dse","total_dse","avg_weekly_visits","last_visit_datetime","last_visited_by","nearest_end_date"
-        ]].copy()
-        table = table.rename(columns={"client_name":"dealer_name","engagement_bucket":"activity"})
-        table = table.sort_values(["activity","availability","city","brand","dealer_name"]).reset_index(drop=True)
-        st.dataframe(table, use_container_width=True)
+            def some_output(area):
+                df_output = dealer_rec[dealer_rec["area_tag_word"] == area][["brand","name","city","tag","joined_dse","active_dse","nearest_end_date","availability"]]
+                st.markdown(f"### There are {len(df_output)} dealers in the radius {radius} km")
+                if not df_output.empty:
+                    bar_src = df_output[["brand","tag","city"]].groupby(["brand","tag"]).count().reset_index().rename(columns={"tag":" ","city":"Count Dealers","brand":"Brand"}).sort_values(" ")
+                    fig = px.bar(bar_src, x="Brand", y="Count Dealers", hover_data=["Brand","Count Dealers"], color=" ", color_discrete_map={"Not Penetrated":"#83c9ff","Not Active":"#ffabab","Active":"#ff2b2b"})
+                    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                    pot_src = df_output[["availability","brand","city"]].groupby(["availability","brand"]).count().reset_index().rename(columns={"availability":"Availability","brand":"Brand","city":"Total Dealers"})
+                    fig1 = px.sunburst(pot_src, path=["Availability","Brand"], values="Total Dealers", color="Availability", color_discrete_map={"Potential":"#83c9ff","Low Generation":"#ffabab","Deficit":"#ff2b2b"}) if not pot_src.empty else None
+                else:
+                    fig = None
+                    fig1 = None
+                col1, col2 = st.columns([2,1])
+                with col1:
+                    if fig is not None:
+                        st.markdown("#### Dealer Penetration")
+                        st.plotly_chart(fig, key=f"bar_{area}")
+                with col2:
+                    if fig1 is not None:
+                        st.markdown("#### Potential Dealer")
+                        st.plotly_chart(fig1, key=f"sun_{area}")
+                if not df_output.empty:
+                    df_shown = df_output.rename(columns={"brand":"Brand","name":"Name","city":"City","tag":"Activity","joined_dse":"Total Joined DSE","active_dse":"Total Active DSE","nearest_end_date":"Nearest Package End Date","availability":"Availability"})
+                    st.markdown("### Dealers Details")
+                    st.dataframe(df_shown.reset_index(drop=True), key=f"tbl_{area}")
+
+            st.title("Dealers Detail")
+            tab_labels = cluster_center["word_pick"].dropna().unique().tolist()
+            tab_labels.sort()
+            tabs = tab_labels if tab_labels else ["No Area"]
+            for tab, area_label in zip(st.tabs(tabs), tabs):
+                with tab:
+                    if area_label == "No Area":
+                        st.info("No areas to display.")
+                    else:
+                        some_output(area_label)
