@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from math import radians
 from difflib import get_close_matches
 from geopy.distance import geodesic
 from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
@@ -16,7 +15,7 @@ def clean_dealers(df):
         cl = c.lower()
         if cl in ["dealer id","dealer_id","id_dealer_outlet","id"]:
             colmap[c] = "id_dealer_outlet"
-        if "client" in cl and "name" in cl or "nama klien" in cl:
+        if ("client" in cl and "name" in cl) or ("nama klien" in cl):
             colmap[c] = "client_name"
         if cl in ["name","dealer name","outlet","outlet name","nama dealer"]:
             colmap[c] = "name"
@@ -68,15 +67,13 @@ def clean_visits(df):
     cand_date_cols = []
     for c in df.columns:
         cl = c.lower()
-        if cl in ["visit_datetime","tanggal datang","tanggal_datang","visit date","date","date_time_start","date time start","waktu datang","tanggal","order_date"]:
+        if cl in ["visit_datetime","tanggal datang","tanggal_datang","visit date","date","date_time_start","date time start","waktu datang","tanggal","order_date","created_at","created at"]:
             cand_date_cols.append(c)
-    parsed = None
+    order_dt = pd.Series([pd.NaT]*len(df))
     for c in cand_date_cols:
         s = pd.to_datetime(df[c], errors="coerce")
-        parsed = s if parsed is None else parsed.fillna(s)
-    if parsed is None:
-        parsed = pd.to_datetime(pd.Series([pd.NaT]*len(df)), errors="coerce")
-    df["visit_datetime"] = parsed
+        order_dt = order_dt.fillna(s)
+    df["visit_datetime"] = order_dt
     def first_col(df, names):
         for n in names:
             if n in df.columns:
@@ -131,41 +128,38 @@ def clean_visits(df):
     return df[keep].reset_index(drop=True)
 
 def clean_orders(df):
-    df = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=["dealer_id","order_date","total_paid_after_tax"])
+    df = df.copy()
     df.columns = [c.strip() for c in df.columns]
-    colmap = {}
+    dealer_col = None
+    amount_col = None
+    date_candidates = []
     for c in df.columns:
         cl = c.lower()
-        if "dealer" in cl and "id" in cl:
-            colmap[c] = "dealer_id"
-        if "order_date" in cl or "date" in cl:
-            colmap[c] = "order_date"
-        if "total_paid_after_tax" in cl or "amount" in cl or "total" in cl:
-            colmap[c] = "total_paid_after_tax"
-    df = df.rename(columns=colmap)
-    if "order_date" in df.columns:
-        df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
-    if "dealer_id" in df.columns:
-        df["dealer_id"] = pd.to_numeric(df["dealer_id"], errors="coerce").astype("Int64")
-    if "total_paid_after_tax" in df.columns:
-        df["total_paid_after_tax"] = pd.to_numeric(df["total_paid_after_tax"], errors="coerce").fillna(0.0)
-    return df
-
-def haversine_km(lat1, lon1, lat2_arr, lon2_arr):
-    R = 6371.0
-    lat1_r = radians(lat1)
-    lon1_r = radians(lon1)
-    lat2_r = np.radians(pd.to_numeric(lat2_arr, errors="coerce"))
-    lon2_r = np.radians(pd.to_numeric(lon2_arr, errors="coerce"))
-    dlat = lat2_r - lat1_r
-    dlon = lon2_r - lon1_r
-    a = np.sin(dlat/2.0)**2 + np.cos(lat1_r) * np.cos(lat2_r) * np.sin(dlon/2.0)**2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
-    return R * c
-
-df_dealer = clean_dealers(df_dealer)
-df_visits = clean_visits(df_visits_raw)
-sales_orders = clean_orders(sales_orders)
+        if dealer_col is None and ("dealer" in cl and "id" in cl):
+            dealer_col = c
+        if amount_col is None and ("total_paid_after_tax" in cl or cl == "amount" or "total" in cl):
+            amount_col = c
+        if cl in ["order_date","order date","date","tanggal","tanggal order","tanggal_order","created_at","created at"]:
+            date_candidates.append(c)
+    if not date_candidates:
+        for c in df.columns:
+            cl = c.lower()
+            if "date" in cl:
+                date_candidates.append(c)
+    order_dt = pd.Series([pd.NaT]*len(df))
+    for c in date_candidates:
+        s = pd.to_datetime(df[c], errors="coerce")
+        order_dt = order_dt.fillna(s)
+    dealer_id = pd.to_numeric(df[dealer_col], errors="coerce").astype("Int64") if dealer_col else pd.Series([pd.NA]*len(df), dtype="Int64")
+    amount = pd.to_numeric(df[amount_col], errors="coerce") if amount_col else pd.Series([0.0]*len(df), dtype="float")
+    out = pd.DataFrame({
+        "dealer_id": dealer_id,
+        "order_date": order_dt,
+        "total_paid_after_tax": amount
+    })
+    return out
 
 def assign_visits_to_dealers(visits, dealers, max_km=1.0):
     if visits is None or visits.empty:
@@ -212,8 +206,6 @@ def assign_visits_to_dealers(visits, dealers, max_km=1.0):
     v["client_name_assigned"] = v["client_name_assigned"].where(v["client_name_assigned"].notna(), None)
     return v
 
-df_visits = assign_visits_to_dealers(df_visits, df_dealer, max_km=1.0)
-
 def compute_visit_metrics(visits, window_days=90):
     if visits is None or visits.empty:
         return pd.DataFrame(columns=["client_name","visits_last_N","last_visit_datetime","last_visited_by","avg_weekly_visits","last_visitor_nik"])
@@ -238,6 +230,10 @@ def compute_visit_metrics(visits, window_days=90):
     agg["avg_weekly_visits"] = (agg["visits_last_N"] / (window_days/7)).round(2)
     return agg
 
+df_dealer = clean_dealers(df_dealer)
+df_visits = clean_visits(df_visits_raw)
+sales_orders = clean_orders(sales_orders)
+df_visits = assign_visits_to_dealers(df_visits, df_dealer, max_km=1.0)
 visit_metrics = compute_visit_metrics(df_visits, window_days=90)
 
 run = running_order.copy() if isinstance(running_order, pd.DataFrame) else pd.DataFrame()
