@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from math import radians, sin, cos, sqrt, atan2
+from math import radians
+from math import sin, cos, sqrt, atan2
 from data_load import df_dealer, df_visits_raw, sales_orders, running_order, location_detail, cluster_left
 
 def clean_dealers(df):
@@ -50,7 +51,7 @@ def _find_combined_latlong_col(df):
     cols = list(df.columns)
     for i,c in enumerate(cols):
         cl = str(c).lower()
-        if ("lat" in cl and "long" in cl) or "latlong" in cl or ("latitude" in cl and "longitude" in cl) or ("&" in cl and "lat" in cl):
+        if "lat" in cl and "long" in cl or "latlong" in cl or ("latitude" in cl and "longitude" in cl) or ("&" in cl and "lat" in cl):
             return i, c
     return None, None
 
@@ -101,9 +102,8 @@ def clean_visits(df):
             s = df.iloc[:, idx].astype(str)
             def parse_ll(x):
                 try:
-                    s = str(x).strip()
-                    s = s.replace("(", "").replace(")", "")
-                    parts = [p.strip() for p in s.split(",") if p.strip()!=""]
+                    t = str(x).strip().replace("(","").replace(")","")
+                    parts = [p.strip() for p in t.split(",") if p.strip()!=""]
                     if len(parts) >= 2:
                         lat = float(parts[0])
                         lon = float(parts[1])
@@ -161,7 +161,9 @@ df_visits = clean_visits(df_visits_raw)
 sales_orders = clean_orders(sales_orders)
 
 def assign_visits_to_dealers(visits, dealers, max_km=1.0):
-    if visits is None or visits.empty or dealers is None or dealers.empty:
+    if visits is None or visits.empty:
+        return visits
+    if dealers is None or dealers.empty:
         visits["client_name_assigned"] = visits.get("client_name", None)
         return visits
     visits = visits.copy()
@@ -233,13 +235,18 @@ else:
 run = running_order.copy() if running_order is not None else pd.DataFrame()
 if not run.empty:
     run.columns = [c.strip() for c in run.columns]
+    ao = run[run.get("IsActive", run.get("IsActive")) == "1"] if "IsActive" in run.columns else run
+    ao["End Date"] = pd.to_datetime(ao.get("End Date", ao.get("End_Date", pd.NaT)), errors="coerce")
+    ao["Dealer Id"] = pd.to_numeric(ao.get("Dealer Id", ao.get("Dealer_Id", ao.get("id_dealer_outlet"))), errors="coerce")
+    ao_group = ao.groupby(["Dealer Id"]).agg(nearest_end_date=("End Date","min")).reset_index().rename(columns={"Dealer Id":"id_dealer_outlet"})
     rm = run.rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name","LMS Id":"joined_dse","IsActive":"active_dse"})
     rm["id_dealer_outlet"] = pd.to_numeric(rm.get("id_dealer_outlet"), errors="coerce")
     rm["joined_dse"] = pd.to_numeric(rm.get("joined_dse"), errors="coerce")
     rm["active_dse"] = pd.to_numeric(rm.get("active_dse"), errors="coerce")
     grouped_run_order = rm.dropna(subset=["id_dealer_outlet"]).groupby(["id_dealer_outlet","dealer_name"]).agg(joined_dse=("joined_dse","count"), active_dse=("active_dse","sum")).reset_index()
+    grouped_run_order = grouped_run_order.merge(ao_group, how="left", on="id_dealer_outlet")
 else:
-    grouped_run_order = pd.DataFrame(columns=["id_dealer_outlet","dealer_name","joined_dse","active_dse"])
+    grouped_run_order = pd.DataFrame(columns=["id_dealer_outlet","dealer_name","joined_dse","active_dse","nearest_end_date"])
 
 avail_df = df_dealer.copy()
 if "id_dealer_outlet" in avail_df.columns:
@@ -266,11 +273,14 @@ avail_df_merge["visits_last_90"] = avail_df_merge.get("visits_last_90", 0).filln
 avail_df_merge["avg_weekly_visits"] = avail_df_merge.get("avg_weekly_visits", 0).fillna(0)
 avail_df_merge["avg_monthly_revenue"] = avail_df_merge.get("avg_monthly_revenue", 0).fillna(0)
 avail_df_merge["total_revenue"] = avail_df_merge.get("total_revenue", 0).fillna(0)
+avail_df_merge["nearest_end_date"] = avail_df_merge.get("nearest_end_date")
 
 def compute_tag(row):
-    if row.get("joined_dse",0)==0 and row.get("total_dse",0)==0 and row.get("visits_last_90",0)==0:
+    if row.get("active_dse", 0) > 0:
+        return "Active"
+    if (row.get("joined_dse",0) == 0) and (row.get("total_dse",0) == 0) and (row.get("visits_last_90",0) == 0):
         return "Not Penetrated"
-    if row.get("visits_last_90",0)==0:
+    if row.get("visits_last_90",0) == 0:
         return "Not Active"
     return "Active"
 
