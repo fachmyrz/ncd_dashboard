@@ -67,7 +67,8 @@ else:
                     continue
                 for i in range(len(n_centers)):
                     col = f"dist_center_{i}"
-                    temp = avail_df_merge[(avail_df_merge.get(col).notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == nm)].copy() if col in avail_df_merge.columns else pd.DataFrame()
+                    temp = avail_df_merge[(col in avail_df_merge.columns) and (avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == nm)]
+                    temp = avail_df_merge[(avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == nm)].copy() if col in avail_df_merge.columns else pd.DataFrame()
                     if temp.empty:
                         continue
                     temp["cluster_labels"] = i
