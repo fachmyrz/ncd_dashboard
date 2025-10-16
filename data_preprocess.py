@@ -23,42 +23,54 @@ df_dealer["longitude"] = _clean_coord(df_dealer["longitude"])
 df_dealer = df_dealer[df_dealer["latitude"].between(-90,90) & df_dealer["longitude"].between(-180,180)].dropna(subset=["latitude","longitude"]).reset_index(drop=True)
 
 df_visit = df_visit.copy()
-if {"Employee Name","Client Name","Date Time Start","Date Time End"}.issubset(df_visit.columns):
-    df_visit = df_visit[["Employee Name","Client Name","Date Time Start","Date Time End","Longitude Start","Latitude Start"]].rename(columns={"Employee Name":"employee_name","Client Name":"client_name","Date Time Start":"date_time_start","Date Time End":"date_time_end","Longitude Start":"long","Latitude Start":"lat"})
-    df_visit["time_start"] = df_visit["date_time_start"].astype(str).apply(lambda x: x.split("@")[1] if "@" in x else np.nan)
-    df_visit["time_end"] = df_visit["date_time_end"].astype(str).apply(lambda x: x.split("@")[1] if "@" in x else np.nan)
-    df_visit["date"] = df_visit["date_time_start"].astype(str).apply(lambda x: x.split("@")[0] if "@" in x else np.nan)
-    df_visit["date"] = df_visit["date"].astype(str).str.strip()
-    df_visit["date"] = pd.to_datetime(df_visit["date"], format="%d %b %Y", errors="coerce").dt.date
-else:
-    for c_from, c_to in [("Nama Karyawan","employee_name"),("Nama Klien","client_name"),("Tanggal Datang","visit_dt"),("Latitude & Longitude Datang","ll")]:
-        if c_from in df_visit.columns:
-            df_visit = df_visit.rename(columns={c_from:c_to})
-    if "visit_dt" in df_visit.columns:
-        df_visit["date"] = pd.to_datetime(df_visit["visit_dt"], errors="coerce").dt.date
-        df_visit["time_start"] = pd.to_datetime(df_visit["visit_dt"], errors="coerce").dt.time
-        df_visit["time_end"] = np.nan
+rename_map = {
+    "Employee Name":"employee_name",
+    "Client Name":"client_name",
+    "Date Time Start":"date_time_start",
+    "Date Time End":"date_time_end",
+    "Longitude Start":"long",
+    "Latitude Start":"lat",
+    "Nama Karyawan":"employee_name",
+    "Nama Klien":"client_name",
+    "Tanggal Datang":"visit_dt",
+    "Latitude & Longitude Datang":"ll",
+    "Nomor Induk Karyawan":"employee_nik",
+    "Divisi":"division",
+}
+present_cols = {c for c in df_visit.columns if c in rename_map}
+if present_cols:
+    df_visit = df_visit.rename(columns={c: rename_map[c] for c in present_cols})
+
+if "visit_dt" in df_visit.columns:
+    df_visit["date"] = pd.to_datetime(df_visit["visit_dt"], errors="coerce")
+    df_visit["time_start"] = pd.to_datetime(df_visit["visit_dt"], errors="coerce")
+    df_visit["time_end"] = pd.NaT
     if "ll" in df_visit.columns:
         parts = df_visit["ll"].astype(str).str.split(",", n=1, expand=True)
         df_visit["lat"] = _clean_coord(parts[0])
         df_visit["long"] = _clean_coord(parts[1] if parts.shape[1] > 1 else np.nan)
-    else:
-        if "Latitude Start" in df_visit.columns and "Longitude Start" in df_visit.columns:
-            df_visit["lat"] = _clean_coord(df_visit["Latitude Start"])
-            df_visit["long"] = _clean_coord(df_visit["Longitude Start"])
-        else:
-            df_visit["lat"] = np.nan
-            df_visit["long"] = np.nan
+else:
+    if {"date_time_start","date_time_end"}.issubset(df_visit.columns):
+        df_visit["time_start"] = pd.to_datetime(df_visit["date_time_start"].astype(str).str.split("@").str[-1], errors="coerce")
+        df_visit["time_end"] = pd.to_datetime(df_visit["date_time_end"].astype(str).str.split("@").str[-1], errors="coerce")
+        df_visit["date"] = pd.to_datetime(df_visit["date_time_start"].astype(str).str.split("@").str[0], format="%d %b %Y", errors="coerce")
+    if "lat" not in df_visit.columns and "Latitude Start" in df_visit.columns:
+        df_visit["lat"] = _clean_coord(df_visit["Latitude Start"])
+    if "long" not in df_visit.columns and "Longitude Start" in df_visit.columns:
+        df_visit["long"] = _clean_coord(df_visit["Longitude Start"])
 
-if "lat" not in df_visit.columns or "long" not in df_visit.columns:
-    df_visit["lat"] = np.nan
-    df_visit["long"] = np.nan
-df_visit["time_start"] = pd.to_datetime(df_visit.get("time_start", np.nan), errors="coerce").dt.time
-df_visit["time_end"] = pd.to_datetime(df_visit.get("time_end", np.nan), errors="coerce").dt.time
-df_visit["duration"] = (pd.to_datetime(df_visit["time_end"].astype(str), errors="coerce") - pd.to_datetime(df_visit["time_start"].astype(str), errors="coerce")).dt.total_seconds() / 60
-df_visit["lat"] = _clean_coord(df_visit["lat"])
-df_visit["long"] = _clean_coord(df_visit["long"])
+df_visit["lat"] = _clean_coord(df_visit.get("lat", np.nan))
+df_visit["long"] = _clean_coord(df_visit.get("long", np.nan))
 df_visit = df_visit[df_visit["lat"].between(-90,90) & df_visit["long"].between(-180,180)].reset_index(drop=True)
+df_visit["date"] = pd.to_datetime(df_visit["date"], errors="coerce").dt.date
+df_visit["time_start"] = pd.to_datetime(df_visit["time_start"], errors="coerce")
+df_visit["time_end"] = pd.to_datetime(df_visit["time_end"], errors="coerce")
+df_visit["duration"] = (df_visit["time_end"] - df_visit["time_start"]).dt.total_seconds() / 60
+
+if "employee_nik" not in df_visit.columns:
+    df_visit["employee_nik"] = np.nan
+if "division" not in df_visit.columns:
+    df_visit["division"] = np.nan
 
 def get_summary_data(pick_date="2024-11-01"):
     summary = df_visit[df_visit["date"] >= pd.to_datetime(pick_date).date()].copy()
