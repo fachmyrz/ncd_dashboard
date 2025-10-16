@@ -4,7 +4,7 @@ import geopy.distance
 from datetime import datetime, timedelta
 from sklearn.cluster import KMeans
 from kneed import KneeLocator
-from data_load import cluster_left, location_detail, df_visit, df_dealer, running_order, sales_data
+from data_load import cluster_left, location_detail, df_visit, df_dealer, running_order
 
 pd.options.mode.copy_on_write = True
 
@@ -21,7 +21,6 @@ df_dealer["longitude"] = _to_float_series(df_dealer["longitude"])
 df_dealer = df_dealer.dropna(subset=["latitude","longitude"]).reset_index(drop=True)
 
 df_visit = df_visit.copy()
-visit_cols = {c:c for c in df_visit.columns}
 rename_map = {}
 for c in df_visit.columns:
     lc = c.lower().strip()
@@ -139,11 +138,11 @@ for name in area_coverage["employee_name"].dropna().unique() if not area_coverag
     a["tag"] = "avail"
     a["sales_name"] = name
     if len(s) >= 2:
-        labs, centers = _kmeans_labels(s.rename(columns={"latitude":"latitude","longitude":"longitude"}))
+        labs, centers = _kmeans_labels(s)
         s["cluster"] = labs
         for i in range(len(centers)):
             c_lat, c_lon = centers[i,0], centers[i,1]
-            a[f"dist_center_{i}"] = geopy.distance.distance((a["latitude"], a["longitude"]), (c_lat, c_lon)).km if False else a.apply(lambda r: geopy.distance.geodesic((c_lat,c_lon),(r.latitude,r.longitude)).km, axis=1)
+            a[f"dist_center_{i}"] = a.apply(lambda r: geopy.distance.geodesic((c_lat,c_lon),(r.latitude,r.longitude)).km, axis=1)
     else:
         s["cluster"] = 0
         centers = np.array([[s["latitude"].mean() if not s.empty else dealers_in["latitude"].mean(), s["longitude"].mean() if not s.empty else dealers_in["longitude"].mean()]])
