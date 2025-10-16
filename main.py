@@ -2,18 +2,20 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from data_preprocess import sum_df, clust_df, avail_df_merge, df_visits
 import streamlit as st
 from PIL import Image
 import pydeck as pdk
 from pydeck.types import String
+from data_preprocess import compute_all
 
 st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon="assets/favicon.png", layout="wide")
+st.markdown("<h1 style='font-size:40px;margin:0'>Filter for Recommendation</h1>", unsafe_allow_html=True)
+
+with st.spinner("Loading data..."):
+    df_dealer, df_visit, df_visits, summary, data_sum, sum_df, clust_df, avail_df_merge = compute_all()
 
 sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Ahlan','Samin Jaya']
 jabodetabek = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
-
-st.markdown("<h1 style='font-size:40px;margin:0'>Filter for Recommendation</h1>", unsafe_allow_html=True)
 
 with st.container(border=True):
     base_visit = df_visits.copy()
