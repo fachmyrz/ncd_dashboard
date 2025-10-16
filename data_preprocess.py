@@ -1,293 +1,190 @@
 import pandas as pd
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
-from sklearn.cluster import KMeans
 import geopy.distance
-import re
-from datetime import datetime
-import streamlit as st
-from data_load import cluster_left, location_detail, df_visit, df_dealer, running_order
+from datetime import datetime, timedelta
+from sklearn.cluster import KMeans
+from kneed import KneeLocator
+from data_load import cluster_left, location_detail, df_visit, df_dealer, running_order, sales_data
 
-pat_num = re.compile(r"-?\d+(?:\.\d+)?")
+pd.options.mode.copy_on_write = True
 
-def _num(s):
-    if pd.isna(s):
-        return np.nan
-    s = str(s).replace("`", "").replace("’", "").replace("‘", "").strip()
-    m = pat_num.search(s)
-    return float(m.group(0)) if m else np.nan
+def _to_float_series(s):
+    return pd.to_numeric(pd.Series(s, dtype=str).str.replace(",", "", regex=False).str.replace("`", "", regex=False).str.strip(), errors="coerce")
 
-def _pair(s):
-    if pd.isna(s):
-        return np.nan, np.nan
-    s = str(s).replace("`", "").replace("’", "").replace("‘", "").strip()
-    nums = re.findall(r"-?\d+(?:\.\d+)?", s)
-    if len(nums) >= 2:
-        a = float(nums[0])
-        b = float(nums[1])
-        if abs(a) > 90 and abs(b) <= 90:
-            a, b = b, a
-        return a, b
-    return np.nan, np.nan
+df_dealer = df_dealer.copy()
+df_dealer["business_type"] = "Car"
+df_dealer = df_dealer[["id_dealer_outlet","brand","business_type","city","name","state","latitude","longitude"]]
+df_dealer = df_dealer[df_dealer["business_type"].isin(["Car"])]
+df_dealer = df_dealer.replace({"latitude":{"":np.nan},"longitude":{"":np.nan}})
+df_dealer["latitude"] = _to_float_series(df_dealer["latitude"])
+df_dealer["longitude"] = _to_float_series(df_dealer["longitude"])
+df_dealer = df_dealer.dropna(subset=["latitude","longitude"]).reset_index(drop=True)
 
-def _ok(lat, lon):
-    return np.isfinite(lat) and np.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180
+df_visit = df_visit.copy()
+visit_cols = {c:c for c in df_visit.columns}
+rename_map = {}
+for c in df_visit.columns:
+    lc = c.lower().strip()
+    if lc == "employee name" or lc == "nama karyawan": rename_map[c] = "employee_name"
+    if lc == "client name" or lc == "nama klien": rename_map[c] = "client_name"
+    if lc in ["date time start","tanggal datang"]: rename_map[c] = "date_time_start"
+    if lc in ["date time end"]: rename_map[c] = "date_time_end"
+    if lc in ["note start"]: rename_map[c] = "note_start"
+    if lc in ["note end"]: rename_map[c] = "note_end"
+    if lc in ["longitude start","longitude datang"]: rename_map[c] = "long"
+    if lc in ["latitude start","latitude datang"]: rename_map[c] = "lat"
+    if lc == "nomor induk karyawan": rename_map[c] = "nomor_induk_karyawan"
+    if lc == "divisi": rename_map[c] = "divisi"
+df_visit = df_visit.rename(columns=rename_map)
+needed = ["employee_name","client_name","date_time_start","date_time_end","note_start","note_end","long","lat"]
+for k in needed:
+    if k not in df_visit.columns:
+        df_visit[k] = np.nan
+df_visit["date"] = df_visit["date_time_start"].astype(str).str.split("@").str[0]
+df_visit["date"] = pd.to_datetime(df_visit["date"], errors="coerce").dt.date
+df_visit["time_start"] = df_visit["date_time_start"].astype(str).str.split("@").str[1].str.strip()
+df_visit["time_end"] = df_visit["date_time_end"].astype(str).str.split("@").str[1].str.strip()
+df_visit["time_start"] = pd.to_datetime(df_visit["time_start"], errors="coerce").dt.time
+df_visit["time_end"] = pd.to_datetime(df_visit["time_end"], errors="coerce").dt.time
+df_visit["lat"] = _to_float_series(df_visit["lat"])
+df_visit["long"] = _to_float_series(df_visit["long"])
+df_visit["duration"] = (pd.to_datetime(df_visit["time_end"].astype(str), errors="coerce") - pd.to_datetime(df_visit["time_start"].astype(str), errors="coerce")).dt.total_seconds()/60
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_sources():
-    d = df_dealer.copy()
-    if "business_type" in d.columns:
-        d = d[d["business_type"].astype(str).str.strip().str.lower() == "car"]
-    d["latitude"] = d["latitude"].apply(_num)
-    d["longitude"] = d["longitude"].apply(_num)
-    d = d[d.apply(lambda r: _ok(r["latitude"], r["longitude"]), axis=1)].reset_index(drop=True)
-    d["name"] = d.get("name", "").astype(str).str.strip()
-    d["city"] = d.get("city", "").astype(str).str.strip()
-    v = df_visit.copy()
-    if "visit_datetime" in v.columns:
-        v["visit_datetime"] = pd.to_datetime(v["visit_datetime"], errors="coerce")
-    elif "Tanggal Datang" in v.columns:
-        v["visit_datetime"] = pd.to_datetime(v["Tanggal Datang"], errors="coerce")
-    elif "Date Time Start" in v.columns:
-        v["visit_datetime"] = pd.to_datetime(v["Date Time Start"].astype(str).str.replace("@"," "), errors="coerce")
+def get_summary_data(vis=None, pick_date="2024-11-01"):
+    if vis is None:
+        summary = df_visit[df_visit["date"] >= pd.to_datetime(pick_date).date()].copy()
     else:
-        v["visit_datetime"] = pd.NaT
-    if "Latitude & Longitude Datang" in v.columns:
-        ll = v["Latitude & Longitude Datang"].apply(_pair)
-        v["latitude"] = ll.apply(lambda t: t[0])
-        v["longitude"] = ll.apply(lambda t: t[1])
-    else:
-        latc = None
-        lonc = None
-        for c in v.columns:
-            cl = c.lower()
-            if latc is None and ("lat" in cl or "latitude" in cl):
-                latc = c
-            if lonc is None and ("lon" in cl or "lng" in cl or "longitude" in cl):
-                lonc = c
-        v["latitude"] = v[latc].apply(_num) if latc else np.nan
-        v["longitude"] = v[lonc].apply(_num) if lonc else np.nan
-    v = v[v.apply(lambda r: _ok(r["latitude"], r["longitude"]), axis=1)].reset_index(drop=True)
-    if "Nama Karyawan" in v.columns:
-        v["employee_name"] = v["Nama Karyawan"].astype(str).str.strip()
-    elif "employee_name" not in v.columns:
-        v["employee_name"] = ""
-    if "Nama Klien" in v.columns:
-        v["client_name"] = v["Nama Klien"].astype(str).str.strip()
-    elif "client_name" not in v.columns:
-        v["client_name"] = ""
-    if "Nomor Induk Karyawan" in v.columns:
-        v["Nomor Induk Karyawan"] = v["Nomor Induk Karyawan"].astype(str)
-    if "Divisi" in v.columns:
-        v["Divisi"] = v["Divisi"].astype(str)
-    ro = running_order.copy()
-    ld = location_detail.rename(columns={"City": "city", "Cluster": "cluster"}).copy()
-    nc = cluster_left.replace({"Brand": {"CHERY": "Chery", "Kia": "KIA"}}).copy()
-    return d, v, ro, ld, nc
-
-def assign_visits_to_dealers(visits, dealers, max_km=1.0):
-    v = visits.copy()
-    d = dealers.copy()
-    if v.empty or d.empty:
-        v["matched_dealer_id"] = np.nan
-        v["matched_client"] = np.nan
-        return v
-    left = v.merge(d[["id_dealer_outlet", "name"]], left_on="client_name", right_on="name", how="left")
-    v["matched_dealer_id"] = left["id_dealer_outlet"]
-    v["matched_client"] = left["name"]
-    mask_un = v["matched_dealer_id"].isna()
-    if mask_un.any():
-        dv = d[["id_dealer_outlet", "latitude", "longitude"]].dropna().reset_index(drop=True)
-        if not dv.empty:
-            xv = np.radians(v.loc[mask_un, ["latitude", "longitude"]].values.astype(float))
-            xd = np.radians(dv[["latitude", "longitude"]].values.astype(float))
-            nbrs = NearestNeighbors(n_neighbors=1, algorithm="ball_tree", metric="haversine").fit(xd)
-            dist, idx = nbrs.kneighbors(xv)
-            dist_km = dist[:, 0] * 6371.0088
-            near = dist_km <= max_km
-            ids = np.full(mask_un.sum(), np.nan)
-            names = np.full(mask_un.sum(), np.nan, dtype=object)
-            sel = idx[near, 0].reshape(-1)
-            if sel.size > 0:
-                ids[near] = dv.iloc[sel]["id_dealer_outlet"].values
-                names[near] = dv.iloc[sel]["id_dealer_outlet"].astype(str).values
-            v.loc[mask_un, "matched_dealer_id"] = ids
-            v.loc[mask_un, "matched_client"] = names
-    return v
-
-def get_summary_data(visits):
-    s = visits.copy()
-    s = s[pd.notna(s["visit_datetime"])]
-    s["date"] = pd.to_datetime(s["visit_datetime"]).dt.date
-    s["lat"] = s["latitude"].astype(float)
-    s["long"] = s["longitude"].astype(float)
-    s.reset_index(drop=True, inplace=True)
-    rows = []
-    for dates in s["date"].unique():
-        for name in s["employee_name"].dropna().unique():
-            t = s[(s.employee_name == name) & (s["date"] == dates)].sort_values("visit_datetime").reset_index(drop=True)
-            t = t[["date", "employee_name", "lat", "long", "visit_datetime"]]
-            if len(t) > 1:
+        summary = vis[vis["date"] >= pd.to_datetime(pick_date).date()].copy()
+    summary["lat"] = pd.to_numeric(summary["lat"], errors="coerce")
+    summary["long"] = pd.to_numeric(summary["long"], errors="coerce")
+    summary = summary.dropna(subset=["lat","long"]).reset_index(drop=True)
+    data = []
+    if summary.empty:
+        cols = ["date","employee_name","ctd_visit","avg_distance_km","avg_time_between_minute","avg_speed_kmpm"]
+        out = pd.DataFrame(columns=cols)
+        out["month_year"] = pd.PeriodIndex([], freq="M").astype(str)
+        return summary, out
+    for dates in summary["date"].unique():
+        for name in summary["employee_name"].dropna().unique():
+            temp = summary[(summary.employee_name == name) & (summary["date"] == dates)].reset_index(drop=True)
+            temp = temp[["date","employee_name","lat","long","time_start","time_end"]]
+            if len(temp) > 1:
                 dist = []
-                mins = []
-                for i in range(len(t) - 1):
-                    dkm = geopy.distance.geodesic((t.loc[i + 1, "lat"], t.loc[i + 1, "long"]), (t.loc[i, "lat"], t.loc[i, "long"])).km
-                    dist.append(round(dkm, 2))
-                    dm = (pd.to_datetime(str(t.loc[i + 1, "visit_datetime"])) - pd.to_datetime(str(t.loc[i, "visit_datetime"]))).total_seconds() / 60
-                    mins.append(dm)
-                spd = round(sum(dist) / sum(mins), 2) if sum(mins) != 0 else 0
-                rows.append([dates, name, len(t), round(np.mean(dist), 2), round(np.mean(mins), 2), spd])
+                time_between = []
+                for i in range(len(temp)-1):
+                    a = (temp.loc[i+1,"lat"], temp.loc[i+1,"long"])
+                    b = (temp.loc[i,"lat"], temp.loc[i,"long"])
+                    d = geopy.distance.geodesic(a, b).km
+                    dist.append(round(d,2))
+                    tb = (pd.to_datetime(str(temp.loc[i+1,"time_start"])) - pd.to_datetime(str(temp.loc[i,"time_start"]))).total_seconds()/60
+                    time_between.append(tb)
+                sp = round((sum(dist)/sum(time_between)),2) if sum(time_between) != 0 else 0
+                data.append([dates,name,len(temp),round(np.mean(dist),2),round(np.mean(time_between),2),sp])
             else:
-                rows.append([dates, name, len(t), 0, 0, 0])
-    cols = ["date", "employee_name", "ctd_visit", "avg_distance_km", "avg_time_between_minute", "avg_speed_kmpm"]
-    data = pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
-    if not data.empty:
-        data["date"] = pd.to_datetime(data["date"])
-        data["month_year"] = data["date"].dt.strftime("%Y-%m")
-    else:
-        data["month_year"] = []
-    return s, data
+                data.append([dates,name,1,0.0,0.0,0.0])
+    cols = ["date","employee_name","ctd_visit","avg_distance_km","avg_time_between_minute","avg_speed_kmpm"]
+    data = pd.DataFrame(data, columns=cols)
+    data["month_year"] = pd.to_datetime(data["date"]).astype("datetime64[M]").astype(str)
+    return summary, data
 
-def cluster_for_name(name, area_coverage, df_dealer, summary):
-    d_ = area_coverage[area_coverage.employee_name == name]
-    if d_.empty:
-        return pd.DataFrame(columns=["date","client_name","latitude","longitude","sales_name","cluster"]), pd.DataFrame(columns=["id_dealer_outlet","brand","business_type","city","name","latitude","longitude","tag","sales_name"]), pd.DataFrame(columns=["latitude","longitude","sales_name","cluster"])
-    get_dealer = df_dealer[(df_dealer.latitude.between(d_.min_lat.values[0], d_.max_lat.values[0])) & (df_dealer.longitude.between(d_.min_long.values[0], d_.max_long.values[0]))]
-    s = summary[summary.employee_name == name][["date", "client_name", "lat", "long"]].rename(columns={"lat": "latitude", "long": "longitude"}).copy()
+summary, data_sum = get_summary_data()
+
+area_rows = []
+if not summary.empty:
+    for name in summary.employee_name.dropna().unique():
+        ll = summary[summary.employee_name == name][["lat","long"]].dropna()
+        if ll.empty:
+            continue
+        min_lat = ll["lat"].min()
+        max_lat = ll["lat"].max()
+        min_long = ll["long"].min()
+        max_long = ll["long"].max()
+        lat_km = geopy.distance.geodesic((max_lat,min_long),(min_lat,min_long)).km
+        lon_km = geopy.distance.geodesic((min_lat,max_long),(min_lat,min_long)).km
+        area = lat_km * lon_km
+        area_rows.append([name,min_lat,max_lat,min_long,max_long,area])
+area_coverage = pd.DataFrame(area_rows, columns=["employee_name","min_lat","max_lat","min_long","max_long","area"])
+for c in ["min_lat","max_lat","min_long","max_long"]:
+    if c in area_coverage.columns:
+        area_coverage[c] = pd.to_numeric(area_coverage[c], errors="coerce")
+
+def _kmeans_labels(df_xy):
+    if len(df_xy) < 2:
+        return np.zeros(len(df_xy), dtype=int), np.array([[df_xy["latitude"].mean(), df_xy["longitude"].mean()]])
+    wcss = []
+    max_k = min(8, max(4, len(df_xy)))
+    X = list(zip(df_xy["latitude"], df_xy["longitude"]))
+    for i in range(4, max_k+1):
+        km = KMeans(n_clusters=i, n_init="auto").fit(X)
+        wcss.append(km.inertia_)
+    knee = KneeLocator(range(4, max_k+1), wcss, curve="convex", direction="decreasing")
+    n_cluster = knee.elbow if getattr(knee, "elbow", None) else min(4, max_k)
+    km = KMeans(n_clusters=n_cluster, n_init="auto")
+    km.fit(X)
+    return km.labels_, km.cluster_centers_
+
+sum_data = []
+avail_data = []
+cluster_center_list = []
+
+for name in area_coverage["employee_name"].dropna().unique() if not area_coverage.empty else []:
+    bounds = area_coverage[area_coverage.employee_name == name].iloc[0]
+    dealers_in = df_dealer[
+        df_dealer.latitude.between(bounds["min_lat"], bounds["max_lat"]) &
+        df_dealer.longitude.between(bounds["min_long"], bounds["max_long"])
+    ].copy()
+    s = summary[summary.employee_name == name][["date","client_name","lat","long"]].rename(columns={"lat":"latitude","long":"longitude"}).copy()
     s["sales_name"] = name
-    a = get_dealer[["id_dealer_outlet", "brand", "business_type", "city", "name", "latitude", "longitude"]].copy()
+    a = dealers_in[["id_dealer_outlet","brand","business_type","city","name","latitude","longitude"]].copy()
     a["tag"] = "avail"
     a["sales_name"] = name
-    if len(s) < 2:
-        centers = np.array([[get_dealer["latitude"].mean(), get_dealer["longitude"].mean()]])
+    if len(s) >= 2:
+        labs, centers = _kmeans_labels(s.rename(columns={"latitude":"latitude","longitude":"longitude"}))
+        s["cluster"] = labs
+        for i in range(len(centers)):
+            c_lat, c_lon = centers[i,0], centers[i,1]
+            a[f"dist_center_{i}"] = geopy.distance.distance((a["latitude"], a["longitude"]), (c_lat, c_lon)).km if False else a.apply(lambda r: geopy.distance.geodesic((c_lat,c_lon),(r.latitude,r.longitude)).km, axis=1)
+    else:
         s["cluster"] = 0
-    else:
-        k = min(4, max(1, len(s)))
-        km = KMeans(n_clusters=k, n_init=10).fit(list(zip(s["latitude"], s["longitude"])))
-        s["cluster"] = km.labels_
-        centers = km.cluster_centers_
-    for i in range(len(centers)):
-        a[f"dist_center_{i}"] = a.apply(lambda r: geopy.distance.geodesic((centers[i, 0], centers[i, 1]), (r.latitude, r.longitude)).km, axis=1)
-    c = pd.DataFrame(centers, columns=["latitude", "longitude"])
-    c["sales_name"] = name
-    c["cluster"] = range(len(centers))
-    return s, a, c
+        centers = np.array([[s["latitude"].mean() if not s.empty else dealers_in["latitude"].mean(), s["longitude"].mean() if not s.empty else dealers_in["longitude"].mean()]])
+        a["dist_center_0"] = a.apply(lambda r: geopy.distance.geodesic((centers[0,0],centers[0,1]),(r.latitude,r.longitude)).km, axis=1)
+    cl = pd.DataFrame(centers, columns=["latitude","longitude"])
+    cl["sales_name"] = name
+    cl["cluster"] = range(len(centers))
+    cluster_center_list.append(cl)
+    avail_data.append(a)
+    sum_data.append(s)
 
-def compute_all(bde_name, radius_km, area_pick, city_pick, brand_pick, penetrated, potential):
-    dealers, visits, ro, ld, nc = load_sources()
-    visits = visits[~visits.get("Nomor Induk Karyawan", pd.Series([], dtype=str)).astype(str).str.contains("deleted-", case=False, na=False)]
-    visits = visits[~visits.get("Divisi", pd.Series([], dtype=str)).astype(str).str.contains("trainer", case=False, na=False)]
-    vmatch = assign_visits_to_dealers(visits, dealers, max_km=1.0)
-    summary, _ = get_summary_data(vmatch)
-    filt = []
-    for n in summary.employee_name.dropna().unique():
-        points = summary[summary.employee_name == n][["lat", "long"]]
-        if points.empty:
-            continue
-        min_lat = points["lat"].min()
-        max_lat = points["lat"].max()
-        min_lon = points["long"].min()
-        max_lon = points["long"].max()
-        lat_km = geopy.distance.geodesic((max_lat, min_lon), (min_lat, min_lon)).km
-        lon_km = geopy.distance.geodesic((min_lat, max_lon), (min_lat, min_lon)).km
-        area = lat_km * lon_km
-        filt.append([n, min_lat, max_lat, min_lon, max_lon, area])
-    ac = pd.DataFrame(filt, columns=["employee_name", "min_lat", "max_lat", "min_long", "max_long", "area"])
-    if ac.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}
-    if bde_name == "All":
-        sum_list = []
-        avail_list = []
-        cl_list = []
-        for n in ac.employee_name.unique():
-            s, a, c = cluster_for_name(n, ac, dealers, summary)
-            sum_list.append(s)
-            avail_list.append(a)
-            cl_list.append(c)
-        sum_df = pd.concat(sum_list, ignore_index=True) if sum_list else pd.DataFrame()
-        avail_df = pd.concat(avail_list, ignore_index=True) if avail_list else pd.DataFrame()
-        clust_df = pd.concat(cl_list, ignore_index=True) if cl_list else pd.DataFrame()
-    else:
-        s, a, c = cluster_for_name(bde_name, ac, dealers, summary)
-        sum_df = s
-        avail_df = a
-        clust_df = c
-    run = ro.rename(columns={"Dealer Id": "id_dealer_outlet", "Dealer Name": "dealer_name", "LMS Id": "joined_dse", "IsActive": "active_dse", "End Date": "End Date"}).copy()
-    run["id_dealer_outlet"] = pd.to_numeric(run["id_dealer_outlet"], errors="coerce")
-    run["active_dse"] = pd.to_numeric(run["active_dse"], errors="coerce")
-    run = run[~run["id_dealer_outlet"].isna()]
-    active = run[run["active_dse"].astype(str) == "1"][["id_dealer_outlet", "dealer_name", "End Date"]].copy()
-    active["End Date"] = pd.to_datetime(active["End Date"], errors="coerce")
-    ao = active.groupby(["id_dealer_outlet", "dealer_name"]).agg({"End Date": "min"}).reset_index().rename(columns={"End Date": "nearest_end_date"})
-    grouped = run.groupby(["id_dealer_outlet", "dealer_name"]).agg({"joined_dse": "count", "active_dse": "sum"}).reset_index()
-    grouped = grouped.merge(ao, how="left", on=["id_dealer_outlet", "dealer_name"])
-    avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce")
-    dist_cols = [c for c in avail_df.columns if str(c).startswith("dist_center_")]
-    if dist_cols:
-        mv = avail_df.fillna(1e12)[dist_cols].min(axis=1)
-        avail_df[dist_cols] = avail_df[dist_cols].where(avail_df[dist_cols].eq(mv, axis=0), np.nan)
-    avail_df_merge = avail_df.merge(grouped.drop(columns=["dealer_name"]), how="left", on="id_dealer_outlet")
-    ld_map = location_detail.rename(columns={"City":"city","Cluster":"cluster"})[["city","cluster"]]
-    avail_df_merge = avail_df_merge.merge(ld_map, how="left", on="city")
-    nc_map = cluster_left.replace({"Brand":{"CHERY":"Chery","Kia":"KIA"}})
-    nc_map = nc_map[nc_map.get("Category","").astype(str) == "Car"].rename(columns={"Cluster":"cluster","Brand":"brand","Daily_Gen":"daily_gen","Daily_Need":"daily_need","Delta":"delta","Tag":"availability"})
-    avail_df_merge = avail_df_merge.merge(nc_map[["cluster","brand","daily_gen","daily_need","delta","availability"]], how="left", on=["brand","cluster"])
-    avail_df_merge["tag"] = np.where(pd.to_datetime(avail_df_merge.get("nearest_end_date"), errors="coerce").notna(), "Active", "Not Active")
-    vstats = vmatch.dropna(subset=["matched_dealer_id"]).copy()
-    vstats["matched_dealer_id"] = pd.to_numeric(vstats["matched_dealer_id"], errors="coerce")
-    wk = vstats.groupby(["matched_dealer_id"]).agg(last_visit=("visit_datetime", "max"), last_bde=("employee_name", "last"), visits=("matched_dealer_id", "count")).reset_index()
-    if not vstats.empty:
-        vstats["week"] = pd.to_datetime(vstats["visit_datetime"]).dt.isocalendar().week
-        w = vstats.groupby(["matched_dealer_id", "week"]).size().reset_index(name="wvis")
-        avgw = w.groupby("matched_dealer_id")["wvis"].mean().reset_index().rename(columns={"wvis": "avg_weekly_visits"})
-    else:
-        avgw = pd.DataFrame(columns=["matched_dealer_id", "avg_weekly_visits"])
-    wk = wk.merge(avgw, how="left", on="matched_dealer_id")
-    wk["avg_weekly_visits"] = wk["avg_weekly_visits"].fillna(0)
-    avail_df_merge = avail_df_merge.merge(wk.rename(columns={"matched_dealer_id": "id_dealer_outlet"}), how="left", on="id_dealer_outlet")
-    avail_df_merge["avg_weekly_visits"] = avail_df_merge["avg_weekly_visits"].fillna(0)
-    avail_df_merge["last_visit"] = pd.to_datetime(avail_df_merge["last_visit"], errors="coerce")
-    avail_df_merge["last_bde"] = avail_df_merge["last_bde"].astype(str).fillna("")
-    if area_pick:
-        avail_df_merge = avail_df_merge[avail_df_merge["cluster"].astype(str).isin([str(x) for x in area_pick])]
-    if city_pick:
-        avail_df_merge = avail_df_merge[avail_df_merge["city"].astype(str).isin(city_pick)]
-    if brand_pick:
-        avail_df_merge = avail_df_merge[avail_df_merge["brand"].astype(str).isin(brand_pick)]
-    if penetrated:
-        avail_df_merge = avail_df_merge[avail_df_merge["tag"].astype(str).isin(penetrated)]
-    if potential:
-        avail_df_merge = avail_df_merge[avail_df_merge["availability"].astype(str).isin(potential)]
-    picks = []
-    for i in range(len([c for c in avail_df_merge.columns if str(c).startswith("dist_center_")]) or 1):
-        col = f"dist_center_{i}"
-        if col in avail_df_merge.columns:
-            t = avail_df_merge[(avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius_km)]
-            if not t.empty:
-                k = t.copy()
-                k["cluster_labels"] = i
-                picks.append(k)
-    pick = pd.concat(picks, ignore_index=True) if picks else avail_df_merge.iloc[0:0].copy()
-    centers = clust_df = None
-    if bde_name == "All":
-        tmp = []
-        for n in ac.employee_name.unique():
-            s, a, c = cluster_for_name(n, ac, dealers, summary)
-            if not c.empty:
-                tmp.append(c)
-        clust_df = pd.concat(tmp, ignore_index=True) if tmp else pd.DataFrame(columns=["latitude","longitude","cluster"])
-        if not clust_df.empty:
-            centers = clust_df.groupby("cluster", as_index=False).agg({"latitude":"mean","longitude":"mean"})
-            centers["sales_name"] = "All"
-        else:
-            centers = pd.DataFrame(columns=["latitude","longitude","cluster","sales_name"])
-    else:
-        s, a, c = cluster_for_name(bde_name, ac, dealers, summary)
-        clust_df = c
-        centers = c.copy()
-    metrics = {}
-    metrics["dealers"] = int(pick["id_dealer_outlet"].nunique()) if not pick.empty else 0
-    metrics["active_dealers"] = int(pick[pick["active_dse"].fillna(0) > 0]["id_dealer_outlet"].nunique()) if not pick.empty else 0
-    metrics["active_dse"] = int(pick["active_dse"].fillna(0).sum()) if not pick.empty else 0
-    metrics["avg_weekly"] = float(pick["avg_weekly_visits"].fillna(0).mean()) if not pick.empty else 0.0
-    return summary, centers, avail_df_merge, pick, metrics
+sum_df = pd.concat(sum_data).reset_index(drop=True) if sum_data else pd.DataFrame(columns=["date","client_name","latitude","longitude","sales_name","cluster"])
+avail_df = pd.concat(avail_data).reset_index(drop=True) if avail_data else pd.DataFrame(columns=["id_dealer_outlet","brand","business_type","city","name","latitude","longitude","tag","sales_name","dist_center_0"])
+clust_df = pd.concat(cluster_center_list).reset_index(drop=True) if cluster_center_list else pd.DataFrame(columns=["latitude","longitude","sales_name","cluster"])
+
+active_order = running_order.rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name","IsActive":"is_active","End Date":"end_date"})
+active_order["end_date"] = pd.to_datetime(active_order["end_date"], errors="coerce")
+active_order["id_dealer_outlet"] = pd.to_numeric(active_order["id_dealer_outlet"], errors="coerce").astype("Int64")
+active_on = active_order[active_order["is_active"].astype(str) == "1"]
+ao_group = active_on.groupby(["id_dealer_outlet","dealer_name"]).agg({"end_date":"min"}).reset_index().rename(columns={"end_date":"nearest_end_date"})
+
+run_order = running_order.rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name","LMS Id":"joined_dse","IsActive":"active_dse"})
+run_order["id_dealer_outlet"] = pd.to_numeric(run_order["id_dealer_outlet"], errors="coerce").astype("Int64")
+run_order["active_dse"] = pd.to_numeric(run_order["active_dse"], errors="coerce").astype("Int64")
+run_order = run_order.dropna(subset=["id_dealer_outlet"])
+grouped_run_order = run_order.groupby(["id_dealer_outlet","dealer_name"]).agg({"joined_dse":"count","active_dse":"sum"}).reset_index()
+grouped_run_order = grouped_run_order.merge(ao_group, how="left", on=["id_dealer_outlet","dealer_name"])
+
+if not avail_df.empty:
+    avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce").astype("Int64")
+
+dist_cols = [c for c in avail_df.columns if c.startswith("dist_center_")]
+if dist_cols:
+    min_values = avail_df[dist_cols].apply(pd.to_numeric, errors="coerce").fillna(1e12).min(axis=1)
+    for c in dist_cols:
+        avail_df[c] = np.where(avail_df[c].astype(float).round(6) == min_values.round(6), avail_df[c], np.nan)
+
+avail_df_merge = avail_df.merge(grouped_run_order, how="left", on="id_dealer_outlet")
+ld = location_detail.rename(columns={"City":"city","Cluster":"cluster"})
+avail_df_merge = avail_df_merge.merge(ld[["city","cluster"]], how="left", on="city")
+nc = cluster_left.replace({"CHERY":"Chery","Kia":"KIA"}).rename(columns={"Cluster":"cluster","Brand":"brand","Daily_Gen":"daily_gen","Daily_Need":"daily_need","Delta":"delta","Tag":"availability","Category":"category"})
+nc = nc[nc["category"] == "Car"]
+avail_df_merge = avail_df_merge.merge(nc[["cluster","brand","daily_gen","daily_need","delta","availability"]], how="left", on=["brand","cluster"])
+avail_df_merge["tag"] = np.where(pd.isna(avail_df_merge["nearest_end_date"]), "Not Active", "Active")
