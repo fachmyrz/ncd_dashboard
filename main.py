@@ -67,15 +67,15 @@ else:
                     continue
                 for i in range(len(n_centers)):
                     col = f"dist_center_{i}"
-                    temp = avail_df_merge[(col in avail_df_merge.columns) and (avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == nm)]
-                    temp = avail_df_merge[(avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == nm)].copy() if col in avail_df_merge.columns else pd.DataFrame()
-                    if temp.empty:
-                        continue
-                    temp["cluster_labels"] = i
-                    pick_avail_lst.append(temp)
-                centers_use = pd.concat([centers_use, n_centers])
+                    if col in avail_df_merge.columns:
+                        temp = avail_df_merge[(avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & (avail_df_merge.sales_name == nm)].copy()
+                        if temp.empty:
+                            continue
+                        temp["cluster_labels"] = i
+                        pick_avail_lst.append(temp)
+                centers_use = pd.concat([centers_use, n_centers]) if not centers_use.empty else n_centers.copy()
             pick_avail = pd.concat(pick_avail_lst, ignore_index=True) if pick_avail_lst else pd.DataFrame(columns=avail_df_merge.columns.tolist() + ["cluster_labels"])
-            cluster_center = centers_use.copy()
+            cluster_center = centers_use.copy() if not centers_use.empty else pd.DataFrame(columns=clust_df.columns)
         else:
             pick_avail_lst = []
             my_centers = clust_df[clust_df.sales_name == bde]
@@ -92,12 +92,12 @@ else:
         if pick_avail.empty or cluster_center.empty:
             st.info(f"No dealers found within {radius} km.")
         else:
-            for c in [f"dist_center_{i}" for i in range(len(sum_df["cluster"].unique()))]:
-                if c in pick_avail.columns:
-                    pick_avail.drop(columns=[c], inplace=True, errors="ignore")
+            drop_cols = [c for c in pick_avail.columns if c.startswith("dist_center_")]
+            if drop_cols:
+                pick_avail.drop(columns=drop_cols, inplace=True, errors="ignore")
             pick_avail["joined_dse"] = pick_avail["joined_dse"].fillna(0)
             pick_avail["active_dse"] = pick_avail["active_dse"].fillna(0)
-            pick_avail["tag"] = np.where((pick_avail["joined_dse"]==0) & (pick_avail["active_dse"]==0), "Not Penetrated", pick_avail["tag"])
+            pick_avail["tag"] = np.where((pick_avail["joined_dse"] == 0) & (pick_avail["active_dse"] == 0), "Not Penetrated", pick_avail["tag"])
             pick_avail["nearest_end_date"] = pick_avail["nearest_end_date"].astype(str)
             pick_avail["nearest_end_date"] = np.where(pick_avail["nearest_end_date"] == "NaT", "No Package Found", pick_avail["nearest_end_date"])
             if bde in sales_jabo or bde == "All":
@@ -129,7 +129,7 @@ else:
                     count_visit_cluster = sum_df[sum_df.sales_name == bde][["cluster","sales_name"]].groupby("cluster").count().reset_index().rename(columns={"sales_name":"count_visit"})
                     cluster_center = cluster_center.merge(count_visit_cluster, on="cluster", how="left")
                 total_visits = max(cluster_center["count_visit"].fillna(0).sum(), 1)
-                cluster_center["size"] = cluster_center["count_visit"].fillna(0)/total_visits*9000
+                cluster_center["size"] = cluster_center["count_visit"].fillna(0) / total_visits * 9000
                 cluster_center["area_tag"] = cluster_center["cluster"].astype(int) + 1
                 cluster_center["word"] = "Area " + cluster_center["area_tag"].astype(str) + "\nCount Visit: " + cluster_center["count_visit"].fillna(0).astype(int).astype(str)
                 cluster_center["word_pick"] = "Area " + cluster_center["area_tag"].astype(str)
@@ -137,16 +137,15 @@ else:
                 dealer_rec["area_tag_word"] = "Area " + dealer_rec["area_tag"].astype(str)
                 dealer_rec["engagement_bucket"] = np.select(
                     [
-                        (dealer_rec["tag"]=="Active") & (dealer_rec["active_dse"].fillna(0)>0),
-                        (dealer_rec["tag"]=="Not Active") & (dealer_rec["joined_dse"].fillna(0)>0),
-                        (dealer_rec["tag"]=="Not Penetrated")
+                        (dealer_rec["tag"] == "Active") & (dealer_rec["active_dse"].fillna(0) > 0),
+                        (dealer_rec["tag"] == "Not Active") & (dealer_rec["joined_dse"].fillna(0) > 0),
+                        (dealer_rec["tag"] == "Not Penetrated")
                     ],
                     ["Active","Churn Risk","Not Penetrated"],
                     default="Unknown"
                 )
                 color_map = {"Active":[21,255,87,220],"Churn Risk":[255,165,0,220],"Not Penetrated":[255,43,43,220],"Unknown":[128,128,128,200]}
-                dealer_rec["color"] = dealer_rec["engagement_bucket"].map(color_map)
-                dealer_rec["color"] = dealer_rec["color"].apply(lambda x: x if isinstance(x, list) else [128,128,128,200])
+                dealer_rec["color"] = dealer_rec["engagement_bucket"].map(color_map).apply(lambda x: x if isinstance(x, list) else [128,128,128,200])
                 if not cluster_center[["longitude","latitude"]].dropna().empty:
                     center_lon = float(cluster_center["longitude"].mean())
                     center_lat = float(cluster_center["latitude"].mean())
