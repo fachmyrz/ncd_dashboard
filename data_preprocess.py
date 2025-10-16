@@ -5,12 +5,6 @@ from data_load import cluster_left, location_detail, df_visit as df_visit_raw, d
 from sklearn.cluster import KMeans
 from kneed import KneeLocator
 
-def pick_col(df, names, default=None):
-    for n in names:
-        if n in df.columns:
-            return n
-    return default
-
 def parse_latlon_series(s):
     s = s.astype(str).str.replace("`","",regex=False).str.strip()
     lat = pd.to_numeric(s.str.extract(r'^\s*([\-0-9\.]+)')[0], errors="coerce")
@@ -19,7 +13,6 @@ def parse_latlon_series(s):
 
 df_dealer = df_dealer_raw.copy()
 df_dealer = df_dealer[["id_dealer_outlet","brand","business_type","city","name","state","latitude","longitude"]]
-df_dealer = df_dealer.dropna().reset_index(drop=True)
 df_dealer["business_type"] = df_dealer["business_type"].astype(str).str.strip()
 df_dealer = df_dealer[df_dealer["business_type"].str.lower()=="car"]
 df_dealer["latitude"] = df_dealer["latitude"].astype(str).str.replace("`","",regex=False).str.replace(",","",regex=False).str.strip().str.strip(".")
@@ -28,68 +21,58 @@ df_dealer["latitude"] = pd.to_numeric(df_dealer["latitude"], errors="coerce")
 df_dealer["longitude"] = pd.to_numeric(df_dealer["longitude"], errors="coerce")
 df_dealer = df_dealer.dropna(subset=["latitude","longitude"]).reset_index(drop=True)
 
-df_visit_src = df_visit_raw.copy()
-emp_col = pick_col(df_visit_src, ["Employee Name","Nama Karyawan","employee_name"], None)
-cli_col = pick_col(df_visit_src, ["Client Name","Nama Klien","client_name","Dealer","dealer_name"], None)
-dt_start_col = pick_col(df_visit_src, ["Date Time Start","Tanggal Datang","date_time_start","Visit Datetime"], None)
-dt_end_col = pick_col(df_visit_src, ["Date Time End","date_time_end"], None)
-note_start_col = pick_col(df_visit_src, ["Note Start","note_start"], None)
-note_end_col = pick_col(df_visit_src, ["Note End","note_end"], None)
-lon_col = pick_col(df_visit_src, ["Longitude Start","long","longitude"], None)
-lat_col = pick_col(df_visit_src, ["Latitude Start","lat","latitude"], None)
-latlon_combo_col = pick_col(df_visit_src, ["Latitude & Longitude Datang","latlong","LatLong"], None)
-keep_cols = [c for c in [emp_col,cli_col,dt_start_col,dt_end_col,note_start_col,note_end_col,lon_col,lat_col,latlon_combo_col] if c is not None]
-df_visit_src = df_visit_src[keep_cols].copy()
+v = df_visit_raw.copy()
 rename_map = {}
-if emp_col: rename_map[emp_col]="employee_name"
-if cli_col: rename_map[cli_col]="client_name"
-if dt_start_col: rename_map[dt_start_col]="date_time_start"
-if dt_end_col: rename_map[dt_end_col]="date_time_end"
-if note_start_col: rename_map[note_start_col]="note_start"
-if note_end_col: rename_map[note_end_col]="note_end"
-if lon_col: rename_map[lon_col]="long"
-if lat_col: rename_map[lat_col]="lat"
-if latlon_combo_col: rename_map[latlon_combo_col]="latlong"
-df_visit_src = df_visit_src.rename(columns=rename_map)
-if "lat" not in df_visit_src.columns or "long" not in df_visit_src.columns:
-    if "latlong" in df_visit_src.columns:
-        lat_s, lon_s = parse_latlon_series(df_visit_src["latlong"])
-        df_visit_src["lat"] = lat_s
-        df_visit_src["long"] = lon_s
+for src, dst in [
+    ("Employee Name","employee_name"),
+    ("Nama Karyawan","employee_name"),
+    ("Client Name","client_name"),
+    ("Nama Klien","client_name"),
+    ("Date Time Start","date_time_start"),
+    ("Tanggal Datang","date_time_start"),
+    ("Date Time End","date_time_end"),
+    ("Note Start","note_start"),
+    ("Note End","note_end"),
+    ("Longitude Start","long"),
+    ("Latitude Start","lat"),
+    ("Latitude & Longitude Datang","latlong"),
+]:
+    if src in v.columns:
+        rename_map[src] = dst
+v = v.rename(columns=rename_map)
+if "lat" not in v.columns or "long" not in v.columns:
+    if "latlong" in v.columns:
+        lat_s, lon_s = parse_latlon_series(v["latlong"])
+        v["lat"] = lat_s
+        v["long"] = lon_s
     else:
-        df_visit_src["lat"] = pd.NA
-        df_visit_src["long"] = pd.NA
-df_visit_src["lat"] = pd.to_numeric(df_visit_src["lat"], errors="coerce")
-df_visit_src["long"] = pd.to_numeric(df_visit_src["long"], errors="coerce")
-if "date_time_start" in df_visit_src.columns:
-    s = df_visit_src["date_time_start"].astype(str)
+        v["lat"] = pd.NA
+        v["long"] = pd.NA
+v["lat"] = pd.to_numeric(v["lat"], errors="coerce")
+v["long"] = pd.to_numeric(v["long"], errors="coerce")
+if "date_time_start" in v.columns:
+    s = v["date_time_start"].astype(str)
     if s.str.contains("@").any():
-        date_part = s.apply(lambda x: x.split("@")[0] if "@" in x else x).str.strip()
-        time_part = s.apply(lambda x: x.split("@")[1] if "@" in x else "")
-        df_visit_src["date"] = pd.to_datetime(date_part, format="%d %b %Y", errors="coerce").dt.date
-        df_visit_src["time_start"] = pd.to_datetime(time_part, errors="coerce").dt.time
+        dates = pd.to_datetime(s.str.split("@").str[0].str.strip(), format="%d %b %Y", errors="coerce")
+        times = pd.to_datetime(s.str.split("@").str[1], errors="coerce")
+        v["date"] = dates.dt.date
+        v["time_start"] = times.dt.time
     else:
         dt = pd.to_datetime(s, errors="coerce")
-        df_visit_src["date"] = dt.dt.date
-        df_visit_src["time_start"] = dt.dt.time
+        v["date"] = dt.dt.date
+        v["time_start"] = dt.dt.time
 else:
-    dt_alt = pick_col(df_visit_src, ["visit_datetime","Tanggal Datang"], None)
-    if dt_alt:
-        dt = pd.to_datetime(df_visit_src[dt_alt].astype(str), errors="coerce")
-        df_visit_src["date"] = dt.dt.date
-        df_visit_src["time_start"] = dt.dt.time
-    else:
-        df_visit_src["date"] = pd.NaT
-        df_visit_src["time_start"] = pd.NaT
-if "date_time_end" in df_visit_src.columns:
-    t = pd.to_datetime(df_visit_src["date_time_end"].astype(str).str.split("@").str[-1], errors="coerce")
-    df_visit_src["time_end"] = t.dt.time
+    v["date"] = pd.NaT
+    v["time_start"] = pd.NaT
+if "date_time_end" in v.columns:
+    te = pd.to_datetime(v["date_time_end"].astype(str).str.split("@").str[-1], errors="coerce")
+    v["time_end"] = te.dt.time
 else:
-    df_visit_src["time_end"] = pd.NaT
-ts_end = pd.to_datetime(df_visit_src["time_end"].astype(str), errors="coerce")
-ts_start = pd.to_datetime(df_visit_src["time_start"].astype(str), errors="coerce")
-df_visit_src["duration"] = (ts_end - ts_start).dt.total_seconds() / 60
-df_visit = df_visit_src[["employee_name","client_name","date","time_start","time_end","duration","lat","long"]].copy()
+    v["time_end"] = pd.NaT
+ts_end = pd.to_datetime(v["time_end"].astype(str), errors="coerce")
+ts_start = pd.to_datetime(v["time_start"].astype(str), errors="coerce")
+v["duration"] = (ts_end - ts_start).dt.total_seconds() / 60
+df_visit = v[["employee_name","client_name","date","time_start","time_end","duration","lat","long"] + [c for c in ["Nomor Induk Karyawan","Divisi"] if c in v.columns]].copy()
 
 def get_summary_data(pick_date="2024-11-01"):
     summary = df_visit[df_visit["date"] >= pd.to_datetime(pick_date).date()].copy()
@@ -119,6 +102,7 @@ def get_summary_data(pick_date="2024-11-01"):
     return summary, df
 
 summary, data_sum = get_summary_data()
+
 flt = []
 for n in summary["employee_name"].dropna().unique():
     ll = summary[summary.employee_name==n][["lat","long"]].dropna()
