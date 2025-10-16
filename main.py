@@ -147,8 +147,15 @@ if button:
         "Not Penetrated":[255, 43, 43, 200],
         "Unknown":[180, 180, 180, 180],
     }
-    dealer_rec["color"] = dealer_rec["engagement_bucket"].map(color_map)
-    dealer_rec["color"] = dealer_rec["color"].apply(lambda x: x if isinstance(x, list) else [180,180,180,180])
+    dealer_rec["color"] = dealer_rec["engagement_bucket"].map(color_map).apply(lambda x: x if isinstance(x, list) else [180,180,180,180])
+
+    dealer_map = dealer_rec[["longitude","latitude","name","brand","availability","engagement_bucket","color"]].dropna(subset=["longitude","latitude"]).copy()
+    dealer_map["longitude"] = dealer_map["longitude"].astype(float)
+    dealer_map["latitude"] = dealer_map["latitude"].astype(float)
+
+    area_labels = cluster_center[["longitude","latitude","word"]].dropna().copy()
+    area_labels["longitude"] = area_labels["longitude"].astype(float)
+    area_labels["latitude"] = area_labels["latitude"].astype(float)
 
     st.markdown("<h2 style='font-size:24px;margin:8px 0'>Penetration Map</h2>", unsafe_allow_html=True)
     st.pydeck_chart(
@@ -159,7 +166,7 @@ if button:
             layers=[
                 pdk.Layer(
                     "ScatterplotLayer",
-                    data=dealer_rec,
+                    data=dealer_map.to_dict(orient="records"),
                     get_position="[longitude,latitude]",
                     get_radius=220,
                     get_fill_color="color",
@@ -169,7 +176,7 @@ if button:
                 ),
                 pdk.Layer(
                     "TextLayer",
-                    data=cluster_center,
+                    data=area_labels.to_dict(orient="records"),
                     get_position="[longitude,latitude]",
                     get_text="word",
                     get_size=12,
@@ -220,7 +227,10 @@ if button:
     pri_map = {"High":[255, 43, 43, 120], "Medium":[255, 210, 0, 120], "Low":[21, 255, 87, 120]}
     city_centers = dealer_rec.groupby("city", as_index=False)[["latitude","longitude"]].mean()
     city_pen = city_pen.merge(city_centers, on="city", how="left")
-    city_pen["color"] = city_pen["priority"].map(pri_map)
+    city_pen = city_pen.dropna(subset=["latitude","longitude"]).copy()
+    city_pen["longitude"] = city_pen["longitude"].astype(float)
+    city_pen["latitude"] = city_pen["latitude"].astype(float)
+    city_pen["color"] = city_pen["priority"].map(pri_map).apply(lambda x: x if isinstance(x, list) else [180,180,180,120])
 
     st.markdown("<h2 style='font-size:24px;margin:8px 0'>Penetration Highlight</h2>", unsafe_allow_html=True)
     st.pydeck_chart(
@@ -231,7 +241,7 @@ if button:
             layers=[
                 pdk.Layer(
                     "ScatterplotLayer",
-                    data=city_pen.dropna(subset=["latitude","longitude"]),
+                    data=city_pen[["city","dealers","not_pen","priority","longitude","latitude","color"]].to_dict(orient="records"),
                     get_position="[longitude,latitude]",
                     get_radius=1500,
                     get_fill_color="color",
