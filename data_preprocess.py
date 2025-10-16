@@ -92,9 +92,9 @@ def assign_visits_to_dealers(visits, dealers, max_km=1.0):
         v["matched_dealer_id"] = np.nan
         v["matched_client"] = np.nan
         return v
-    left = v.merge(d[["id_dealer_outlet", "name"]], left_on="client_name", right_on="name", how="left", suffixes=("", "_d"))
+    left = v.merge(d[["id_dealer_outlet", "name"]], left_on="client_name", right_on="name", how="left")
     v["matched_dealer_id"] = left["id_dealer_outlet"]
-    v["matched_client"] = left["name_d"]
+    v["matched_client"] = left["name"]
     mask_un = v["matched_dealer_id"].isna()
     if mask_un.any():
         dv = d[["id_dealer_outlet", "latitude", "longitude"]].dropna().reset_index(drop=True)
@@ -227,10 +227,11 @@ def compute_all(bde_name, radius_km, area_pick, city_pick, brand_pick, penetrate
         mv = avail_df.fillna(1e12)[dist_cols].min(axis=1)
         avail_df[dist_cols] = avail_df[dist_cols].where(avail_df[dist_cols].eq(mv, axis=0), np.nan)
     avail_df_merge = avail_df.merge(grouped.drop(columns=["dealer_name"]), how="left", on="id_dealer_outlet")
-    ld_map = ld[["city", "cluster"]].copy()
+    ld_map = location_detail.rename(columns={"City":"city","Cluster":"cluster"})[["city","cluster"]]
     avail_df_merge = avail_df_merge.merge(ld_map, how="left", on="city")
-    nc_map = nc[nc.get("Category", "").astype(str) == "Car"].rename(columns={"Cluster": "cluster", "Brand": "brand", "Daily_Gen": "daily_gen", "Daily_Need": "daily_need", "Delta": "delta", "Tag": "availability"})
-    avail_df_merge = avail_df_merge.merge(nc_map[["cluster", "brand", "daily_gen", "daily_need", "delta", "availability"]], how="left", on=["brand", "cluster"])
+    nc_map = cluster_left.replace({"Brand":{"CHERY":"Chery","Kia":"KIA"}})
+    nc_map = nc_map[nc_map.get("Category","").astype(str) == "Car"].rename(columns={"Cluster":"cluster","Brand":"brand","Daily_Gen":"daily_gen","Daily_Need":"daily_need","Delta":"delta","Tag":"availability"})
+    avail_df_merge = avail_df_merge.merge(nc_map[["cluster","brand","daily_gen","daily_need","delta","availability"]], how="left", on=["brand","cluster"])
     avail_df_merge["tag"] = np.where(pd.to_datetime(avail_df_merge.get("nearest_end_date"), errors="coerce").notna(), "Active", "Not Active")
     vstats = vmatch.dropna(subset=["matched_dealer_id"]).copy()
     vstats["matched_dealer_id"] = pd.to_numeric(vstats["matched_dealer_id"], errors="coerce")
