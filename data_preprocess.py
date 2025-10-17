@@ -51,6 +51,9 @@ def split_latlon(col):
         return _to_float(parts[0]), _to_float(parts[1])
     return np.nan, np.nan
 
+def _valid_mask(lat_series, lon_series):
+    return pd.Series([_valid_latlon(a,b) for a,b in zip(lat_series, lon_series)], index=lat_series.index)
+
 def clean_dealers(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -78,9 +81,6 @@ def clean_dealers(df: pd.DataFrame) -> pd.DataFrame:
     out = out[out["business_type"].astype(str).str.strip().str.lower()=="car"]
     out = out[["id_dealer_outlet","brand","business_type","city","name","latitude","longitude"]].drop_duplicates()
     return out.reset_index(drop=True)
-
-def _valid_mask(lat_series, lon_series):
-    return pd.Series([_valid_latlon(a,b) for a,b in zip(lat_series, lon_series)], index=lat_series.index)
 
 def clean_visits(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -228,7 +228,7 @@ def get_summary_data(visits: pd.DataFrame):
     agg["avg_distance_km"] = 0.0
     agg["avg_time_between_minute"] = 0.0
     agg["avg_speed_kmpm"] = 0.0
-    agg["month_year"] = pd.to_datetime(agg["date"]).astype("datetime64[M]").astype str
+    agg["month_year"] = pd.to_datetime(agg["date"]).astype("datetime64[M]").astype(str)
     return v, agg
 
 def compute_all():
