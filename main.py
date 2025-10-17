@@ -1,171 +1,162 @@
 import streamlit as st
-from PIL import Image
 import pandas as pd
 import numpy as np
+import plotly.express as px
 import pydeck as pdk
 from pydeck.types import String
-import plotly.express as px
-from data_preprocess import compute_all, haversine_vec
-
-# minimal page config
-try:
-    st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon="assets/favicon.png", layout="wide")
-except Exception:
-    st.set_page_config(page_title="Dealer Penetration Dashboard", layout="wide")
-
+from PIL import Image
+from data_preprocess import compute_all
+st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon="assets/favicon.png", layout="wide")
 computed = compute_all()
 sum_df = computed.get("sum_df", pd.DataFrame())
 clust_df = computed.get("clust_df", pd.DataFrame())
 avail_df_merge = computed.get("avail_df_merge", pd.DataFrame())
-df_visits = computed.get("df_visits", pd.DataFrame())
-revenue_monthly = computed.get("revenue_monthly", pd.DataFrame())
-
-sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Achlan','Samin Jaya']
-jabodetabek_cities = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
-
+df_visit = computed.get("df_visits", pd.DataFrame())
+sales_jabo = sorted(["A. Sofyan","Nova Handoyo","Heriyanto","Aditya rifat","Riski Amrullah Zulkarnain","Rudy Setya Wibowo","Muhammad Ahlan","Samin Jaya"])
+jabodetabek = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
 st.markdown("<h1 style='font-size:40px;margin:0'>Filter for Recommendation</h1>", unsafe_allow_html=True)
-
 with st.container():
-    base = df_visits.copy() if df_visits is not None else pd.DataFrame()
-    nik_mask = ~base.get("nik", pd.Series("", dtype=str)).astype(str).str.contains("deleted-", case=False, na=False)
-    div_mask = ~base.get("divisi", pd.Series("", dtype=str)).astype(str).str.contains("Trainer", case=False, na=False)
-    bde_list = sorted(base.loc[nik_mask & div_mask, "employee_name"].dropna().astype(str).unique().tolist()) if not base.empty else []
+    base = df_visit.copy() if not df_visit.empty else pd.DataFrame()
+    nik_mask = ~base.get("nik", pd.Series("", dtype=str)).astype(str).str.contains("deleted-", na=False)
+    div_mask = ~base.get("divisi", pd.Series("", dtype=str)).astype(str).str.contains("trainer", case=False, na=False)
+    try:
+        bde_list = sorted(base.loc[nik_mask & div_mask, "employee_name"].dropna().astype(str).unique().tolist())
+    except:
+        bde_list = sales_jabo
     name = st.selectbox("BDE Name", ["All"] + bde_list, index=0)
     cols1 = st.columns(2)
     with cols1[0]:
         penetrated = st.multiselect("Dealer Activity", ['All','Not Active','Not Penetrated','Active'], default=['All'])
         if "All" in penetrated:
             penetrated = ['Not Active','Not Penetrated','Active']
-        radius = st.slider("Choose Radius (km)", 0, 50, 15)
+        radius = st.slider("Choose Radius", 0, 50, 15)
     with cols1[1]:
         potential = st.multiselect("Dealer Availability", ['All','Potential','Low Generation','Deficit'], default=['All'])
         if "All" in potential:
             potential = ['Potential','Low Generation','Deficit']
-    all_areas = []
-    if avail_df_merge is not None and not avail_df_merge.empty and "cluster" in avail_df_merge.columns:
-        tmp = avail_df_merge.groupby("cluster").id_dealer_outlet.nunique().reset_index().rename(columns={"id_dealer_outlet":"count"})
-        tmp = tmp.sort_values("count", ascending=False)
-        all_areas = tmp["cluster"].astype(str).tolist()
-    default_area = ["Jabodetabek"] if "Jabodetabek" in all_areas else (all_areas[:1] if all_areas else [])
-    area = st.multiselect("Area (cluster)", ["All"] + all_areas, default=["All"] + default_area)
-    if "All" in area:
-        area = all_areas
-    city_choices = []
-    if name and name != "All" and (avail_df_merge is not None and not avail_df_merge.empty):
-        city_choices = avail_df_merge[avail_df_merge.get("sales_name","") == name]["city"].dropna().unique().tolist()
-    else:
-        city_choices = avail_df_merge["city"].dropna().unique().tolist() if (avail_df_merge is not None and not avail_df_merge.empty) else []
-    if not city_choices:
-        city_choices = []
-    city_pick = st.multiselect("Choose City", ["All"] + sorted(city_choices), default=["All"] + sorted(city_choices) if city_choices else [])
-    if "All" in city_pick:
-        city_pick = city_choices
-    brand_choices = avail_df_merge["brand"].dropna().unique().tolist() if (avail_df_merge is not None and not avail_df_merge.empty) else []
-    brand = st.multiselect("Choose Brand", ["All"] + sorted(brand_choices), default=["All"] + sorted(brand_choices) if brand_choices else [])
+        if name != "All" and name in sales_jabo:
+            cities = avail_df_merge[(avail_df_merge.sales_name==name) & (avail_df_merge.city.isin(jabodetabek))]["city"].dropna().unique().tolist()
+        else:
+            cities = avail_df_merge[(avail_df_merge.sales_name==name if name!="All" else True) & (~avail_df_merge.city.isin(jabodetabek))]["city"].dropna().unique().tolist()
+        cities = sorted(list(set(cities)))
+        city_pick = st.multiselect("Choose City", ["All"] + cities, default=["All"])
+        if "All" in city_pick:
+            city_pick = cities
+    brand_choose = avail_df_merge[(avail_df_merge.sales_name==name if name!="All" else True) & (avail_df_merge.city.isin(city_pick) if city_pick else True) & (avail_df_merge.tag.isin(penetrated) if 'tag' in avail_df_merge.columns else True) & (avail_df_merge.availability.isin(potential) if 'availability' in avail_df_merge.columns else True)]
+    brand_list = sorted(brand_choose.get("brand", pd.Series("", dtype=str)).dropna().unique().tolist())
+    brand = st.multiselect("Choose Brand", ["All"] + brand_list, default=["All"])
     if "All" in brand:
-        brand = brand_choices
+        brand = brand_list
     button = st.button("Submit")
-
-def compute_center(name, visits_df, avail_df):
-    if name == "All" or not name:
-        if avail_df is not None and "cluster" in avail_df.columns and "Jabodetabek" in avail_df["cluster"].unique():
-            c = avail_df[avail_df["cluster"] == "Jabodetabek"]
-            if not c.empty and "longitude" in c.columns and "latitude" in c.columns:
-                return float(c["longitude"].mean()), float(c["latitude"].mean())
-        if not visits_df.empty and "long" in visits_df.columns and "lat" in visits_df.columns:
-            return float(visits_df["long"].mean()), float(visits_df["lat"].mean())
-        return 106.84513, -6.21462
-    sel = visits_df[visits_df["employee_name"]==name] if not visits_df.empty else pd.DataFrame()
-    if sel.empty:
-        if not visits_df.empty and "long" in visits_df.columns and "lat" in visits_df.columns:
-            return float(visits_df["long"].mean()), float(visits_df["lat"].mean())
-        return 106.84513, -6.21462
-    return float(sel["long"].mean()), float(sel["lat"].mean())
-
-if button:
-    lon_center, lat_center = compute_center(name, df_visits, avail_df_merge)
-    if avail_df_merge is None or avail_df_merge.empty:
-        st.info("No dealer data available")
+if not button:
+    st.info("Set filters and click Submit.")
+else:
+    if sum_df is None or sum_df.empty:
+        st.warning("No summary data found.")
     else:
-        dealers = avail_df_merge.copy()
-        if brand:
-            dealers = dealers[dealers["brand"].isin(brand)]
-        if city_pick:
-            dealers = dealers[dealers["city"].isin(city_pick)]
-        if area:
-            dealers = dealers[dealers["cluster"].astype(str).isin([str(x) for x in area])]
-        if "latitude" in dealers.columns and "longitude" in dealers.columns:
-            lat_arr = dealers["latitude"].fillna(0).to_numpy(dtype=float)
-            lon_arr = dealers["longitude"].fillna(0).to_numpy(dtype=float)
-            center_lat_arr = np.full_like(lat_arr, float(lat_center))
-            center_lon_arr = np.full_like(lon_arr, float(lon_center))
-            dealers["dist_center"] = haversine_vec(center_lat_arr, center_lon_arr, lat_arr, lon_arr)
+        pick_avail_lst = []
+        unique_clusters = sorted(sum_df.cluster.dropna().unique().tolist()) if "cluster" in sum_df.columns else []
+        for i in unique_clusters:
+            col = f"dist_center_{i}"
+            if col in avail_df_merge.columns:
+                temp_pick = avail_df_merge[(avail_df_merge[col].notna()) & (avail_df_merge[col] <= radius) & ((avail_df_merge.sales_name == name) if name!="All" else True)].copy()
+                if not temp_pick.empty:
+                    temp_pick['cluster_labels'] = i
+                    pick_avail_lst.append(temp_pick)
+        if not pick_avail_lst:
+            st.info(f"No dealers found within {radius} km.")
         else:
-            dealers["dist_center"] = np.nan
-        dealers = dealers[(dealers["dist_center"] <= radius) | (dealers["dist_center"].isna())]
-        dealers["joined_dse"] = dealers.get("joined_dse", 0).fillna(0).astype(int)
-        dealers["active_dse"] = dealers.get("active_dse", 0).fillna(0).astype(int)
-        dealers["tag"] = np.where((dealers["joined_dse"]==0)&(dealers["active_dse"]==0),"Not Penetrated", dealers.get("tag","Not Penetrated"))
-        if name in sales_jabo:
-            dealers = dealers[dealers["cluster"].astype(str) == "Jabodetabek"]
-        else:
-            dealers = dealers[dealers["cluster"].astype(str) != "Jabodetabek"]
-        if potential:
-            dealers = dealers[dealers.get("availability","").isin(potential)]
-        if penetrated:
-            dealers = dealers[dealers.get("tag","").isin(penetrated)]
-        if dealers.empty:
-            st.info(f"No dealers found matching filters within {radius} km")
-        else:
-            dealers = dealers.sort_values(["dist_center","id_dealer_outlet"], ascending=True)
-            centers = clust_df.copy()
-            st.markdown("<h2 style='font-size:24px;margin:8px 0'>Penetration Map</h2>", unsafe_allow_html=True)
-            dealers["color"] = dealers.apply(lambda r: [21,255,87,200] if r.get("tag","")=="Active" else ([131,201,255,200] if r.get("tag","")=="Not Penetrated" else [255,170,170,200]), axis=1)
-            # ensure color lists
-            dealers["color"] = dealers["color"].apply(lambda x: x if isinstance(x,(list,tuple,np.ndarray)) else [200,200,200,150])
-            text_layer = pdk.Layer(
-                "TextLayer",
-                data=centers if not centers.empty else pd.DataFrame(),
-                get_position="[longitude,latitude]",
-                get_text="cluster",
-                get_size=12,
-                get_color=[0,0,0],
-                get_angle=0,
-                get_text_anchor=String("middle"),
-                get_alignment_baseline=String("center")
-            )
-            scatter = pdk.Layer(
-                "ScatterplotLayer",
-                data=dealers,
-                get_position="[longitude,latitude]",
-                get_radius=200,
-                get_color="color",
-                pickable=True,
-                auto_highlight=True
-            )
-            center_layer = pdk.Layer(
-                "ScatterplotLayer",
-                data=centers if not centers.empty else pd.DataFrame(),
-                get_position="[longitude,latitude]",
-                get_radius=centers["count_dealers"].fillna(100).to_list() if (not centers.empty and "count_dealers" in centers.columns) else 100,
-                get_color=[200,30,0,90]
-            )
-            view = pdk.ViewState(longitude=lon_center, latitude=lat_center, zoom=10, pitch=40)
-            deck = pdk.Deck(map_style=None, initial_view_state=view, layers=[text_layer, scatter, center_layer], tooltip={'text':"Dealer Name: {name}\nBrand: {brand}\nAvailability: {availability}\nPenetration: {tag}"})
-            st.pydeck_chart(deck)
-            def area_output(df):
-                df_out = df[['brand','name','city','tag','joined_dse','active_dse','nearest_end_date','availability']].drop_duplicates(subset=['name'])
-                st.markdown(f"### There are {len(df_out)} dealers in selection")
-                if not df_out.empty:
-                    bar_src = df_out.groupby(['brand','tag']).size().reset_index(name='Count Dealers')
-                    fig = px.bar(bar_src, x='brand', y='Count Dealers', color='tag', labels={'brand':"Brand"}, color_discrete_map={'Not Penetrated':"#83c9ff",'Not Active':'#ffabab','Active':"#83ff8a"})
-                    st.plotly_chart(fig, use_container_width=True)
-                    pot_df_output = df_out.groupby(['availability','brand']).size().reset_index(name='Total Dealers')
-                    if not pot_df_output.empty:
-                        fig1 = px.sunburst(pot_df_output, path=['availability','brand'], values='Total Dealers', color='availability', color_discrete_map={'Potential':"#83c9ff",'Low Generation':'#ffabab','Deficit':"#ff2b2b"})
-                        st.plotly_chart(fig1, use_container_width=True)
-                df_shown = df_out.rename(columns={'brand':'Brand','name':'Dealer Name','city':'City','tag':'Activity','joined_dse':'Total Joined DSE','active_dse':'Total Active DSE','nearest_end_date':'Nearest Package End Date','availability':'Availability'})
-                st.dataframe(df_shown.reset_index(drop=True))
-            st.markdown("<h2 style='font-size:20px;margin:8px 0'>Dealers Detail</h2>", unsafe_allow_html=True)
-            area_output(dealers)
-
+            pick_avail = pd.concat(pick_avail_lst, ignore_index=True)
+            drop_cols = [c for c in pick_avail.columns if c.startswith("dist_center_")]
+            pick_avail = pick_avail.drop(columns=drop_cols, errors='ignore')
+            pick_avail['joined_dse'] = pick_avail.get('joined_dse', pd.Series(0)).fillna(0).astype(int)
+            pick_avail['active_dse'] = pick_avail.get('active_dse', pd.Series(0)).fillna(0).astype(int)
+            pick_avail['tag'] = np.where((pick_avail.joined_dse==0)&(pick_avail.active_dse==0),"Not Penetrated", pick_avail.get('tag', pd.Series("Not Penetrated")))
+            pick_avail['nearest_end_date'] = pd.to_datetime(pick_avail.get('nearest_end_date', pd.Series(pd.NaT)), errors="coerce")
+            pick_avail['nearest_end_date'] = pick_avail['nearest_end_date'].dt.strftime("%Y-%m-%d")
+            if name in sales_jabo:
+                pick_avail = pick_avail[pick_avail.cluster == 'Jabodetabek'] if 'cluster' in pick_avail.columns else pick_avail
+            else:
+                pick_avail = pick_avail[pick_avail.cluster != 'Jabodetabek'] if 'cluster' in pick_avail.columns else pick_avail
+            if city_pick:
+                pick_avail = pick_avail[pick_avail.city.isin(city_pick)]
+            if potential:
+                pick_avail = pick_avail[pick_avail.availability.isin(potential)] if 'availability' in pick_avail.columns else pick_avail
+            if penetrated:
+                pick_avail = pick_avail[pick_avail.tag.isin(penetrated)]
+            if brand:
+                pick_avail = pick_avail[pick_avail.brand.isin(brand)]
+            dealer_rec = pick_avail.copy()
+            dealer_rec = dealer_rec.drop_duplicates(subset=["id_dealer_outlet"]) if "id_dealer_outlet" in dealer_rec.columns else dealer_rec
+            if dealer_rec.empty:
+                st.info("No dealers match the filters.")
+            else:
+                dealer_rec = dealer_rec.sort_values(['cluster_labels','availability' if 'availability' in dealer_rec.columns else 'brand','latitude','longitude'], ascending=False)
+                cluster_center = clust_df[clust_df.sales_name == name] if name!="All" else clust_df.copy()
+                count_visit_cluster = sum_df[sum_df.sales_name == name][['cluster','sales_name']].groupby('cluster').count().reset_index().rename(columns={'sales_name':'count_visit'}) if name!="All" else sum_df[['cluster']].groupby('cluster').size().reset_index(name='count_visit')
+                if not cluster_center.empty and not count_visit_cluster.empty:
+                    cluster_center = cluster_center.merge(count_visit_cluster, on='cluster', how='left')
+                    total_visits = max(cluster_center['count_visit'].sum(), 1)
+                    cluster_center['size'] = cluster_center['count_visit']/total_visits*9000
+                    cluster_center['area_tag'] = cluster_center['cluster'].astype(int) + 1
+                    cluster_center['word'] = "Area " + cluster_center['area_tag'].astype(str) + "\nCount Visit: " + cluster_center['count_visit'].fillna(0).astype(int).astype(str)
+                    cluster_center['word_pick'] = "Area " + cluster_center['area_tag'].astype(str)
+                else:
+                    cluster_center = pd.DataFrame([{"longitude": dealer_rec["longitude"].mean(), "latitude": dealer_rec["latitude"].mean()}])
+                dealer_rec['area_tag'] = dealer_rec.get('cluster_labels', pd.Series(0)).astype(int) + 1
+                dealer_rec['area_tag_word'] = "Area " + dealer_rec['area_tag'].astype(str)
+                center_lon = float(cluster_center.longitude.mean()) if 'longitude' in cluster_center.columns else float(dealer_rec.longitude.mean())
+                center_lat = float(cluster_center.latitude.mean()) if 'latitude' in cluster_center.columns else float(dealer_rec.latitude.mean())
+                def _col_color(row):
+                    tag = row.get('tag','Not Penetrated')
+                    if tag == "Not Penetrated":
+                        return [131,201,255,200]
+                    if tag == "Not Active":
+                        return [255,171,171,200]
+                    if tag == "Active":
+                        return [255,43,43,200]
+                    return [200,200,200,200]
+                dealer_rec['color'] = dealer_rec.apply(_col_color, axis=1).tolist()
+                st.markdown("<h2 style='font-size:24px;margin:8px 0'>Penetration Map</h2>", unsafe_allow_html=True)
+                deck = pdk.Deck(map_style=None, initial_view_state=pdk.ViewState(longitude=center_lon, latitude=center_lat, zoom=10, pitch=50), tooltip={'text':"Dealer Name: {name}\nBrand: {brand}\nAvailability: {availability}\nPenetration: {tag}"}, layers=[
+                    pdk.Layer("TextLayer", data=cluster_center.to_dict(orient='records') if not cluster_center.empty else [], get_position="[longitude,latitude]", get_text="word", get_size=12, get_color=[0,100,0], get_angle=0, get_text_anchor=String("middle"), get_alignment_baseline=String("center")),
+                    pdk.Layer("ScatterplotLayer", data=dealer_rec.to_dict(orient='records'), get_position="[longitude,latitude]", get_radius=200, get_fill_color="color", pickable=True, auto_highlight=True),
+                    pdk.Layer("ScatterplotLayer", data=cluster_center.to_dict(orient='records') if not cluster_center.empty else [], get_position="[longitude,latitude]", get_radius="size", get_fill_color=[200,30,0,90])
+                ])
+                st.pydeck_chart(deck)
+                def some_output(area):
+                    df_output = dealer_rec[dealer_rec.area_tag_word == area] if 'area_tag_word' in dealer_rec.columns else dealer_rec
+                    df_output = df_output[['brand','name','city','tag','joined_dse','active_dse','nearest_end_date','availability']] if set(['brand','name']).issubset(df_output.columns) else df_output
+                    st.markdown(f"### There are {len(df_output)} dealers in the radius {radius} km")
+                    if not df_output.empty:
+                        bar_src = df_output[['brand','tag','city']].groupby(['brand','tag']).size().reset_index(name='Count Dealers')
+                        fig = px.bar(bar_src, x='brand', y='Count Dealers', color='tag', labels={'brand':'Brand','tag':'Activity'})
+                        fig.update_layout(legend=dict(orientation='h',yanchor="bottom",y=1.02,xanchor="right",x=1))
+                        pot_df_output = df_output[['availability','brand','city']].groupby(['availability','brand']).size().reset_index(name='Total Dealers')
+                        if not pot_df_output.empty:
+                            fig1 = px.sunburst(pot_df_output, path=['availability','brand'], values='Total Dealers', color='availability')
+                        else:
+                            fig1 = None
+                    else:
+                        fig = None
+                        fig1 = None
+                    col1, col2 = st.columns([2,1])
+                    with col1:
+                        if fig is not None:
+                            st.markdown("#### Dealer Penetration")
+                            st.plotly_chart(fig, use_container_width=True)
+                    with col2:
+                        if fig1 is not None:
+                            st.markdown("#### Potential Dealer")
+                            st.plotly_chart(fig1, use_container_width=True)
+                    if not df_output.empty:
+                        df_shown = df_output.rename(columns={'brand':'Brand','name':'Name','city':'City','tag':'Activity','joined_dse':'Total Joined DSE','active_dse':'Total Active DSE','nearest_end_date':'Nearest Package End Date','availability':'Availability'})
+                        df_shown = df_shown.drop_duplicates(subset=['Name']) if 'Name' in df_shown.columns else df_shown
+                        st.markdown("### Dealers Details")
+                        st.dataframe(df_shown.reset_index(drop=True))
+                st.markdown("<h2 style='font-size:20px;margin:8px 0'>Dealers Detail</h2>", unsafe_allow_html=True)
+                tab_labels = cluster_center['word_pick'].dropna().unique().tolist() if 'word_pick' in cluster_center.columns else ["All"]
+                tab_labels = sorted(tab_labels)
+                for tab, area_label in zip(st.tabs(tab_labels), tab_labels):
+                    with tab:
+                        some_output(area_label)
