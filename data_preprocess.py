@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from datetime import timedelta
 from sklearn.cluster import KMeans
 from kneed import KneeLocator
 import geopy.distance
@@ -20,6 +19,26 @@ def _to_float(x):
             return float(str(x).replace(",", "."))
         except Exception:
             return np.nan
+
+def _valid_latlon(lat, lon):
+    try:
+        if pd.isna(lat) or pd.isna(lon):
+            return False
+        latf = float(lat)
+        lonf = float(lon)
+        if not np.isfinite(latf) or not np.isfinite(lonf):
+            return False
+        return -90.0 <= latf <= 90.0 and -180.0 <= lonf <= 180.0
+    except Exception:
+        return False
+
+def _km(lat1, lon1, lat2, lon2):
+    if not _valid_latlon(lat1, lon1) or not _valid_latlon(lat2, lon2):
+        return np.inf
+    try:
+        return geopy.distance.geodesic((float(lat1), float(lon1)), (float(lat2), float(lon2))).km
+    except Exception:
+        return np.inf
 
 def split_latlon(col):
     if pd.isna(col):
@@ -51,13 +70,17 @@ def clean_dealers(df: pd.DataFrame) -> pd.DataFrame:
         out["longitude"] = lon
     out["latitude"] = out["latitude"].apply(_to_float)
     out["longitude"] = out["longitude"].apply(_to_float)
+    out["id_dealer_outlet"] = pd.to_numeric(out["id_dealer_outlet"], errors="coerce").astype("Int64")
     if "business_type" not in out.columns:
         out["business_type"] = "Car"
-    out = out.dropna(subset=["latitude","longitude"])
-    out["id_dealer_outlet"] = pd.to_numeric(out["id_dealer_outlet"], errors="coerce").astype("Int64")
+    out = out.dropna(subset=["id_dealer_outlet","brand","city","name"])
+    out = out[_valid_mask(out["latitude"], out["longitude"])]
     out = out[out["business_type"].astype(str).str.strip().str.lower()=="car"]
     out = out[["id_dealer_outlet","brand","business_type","city","name","latitude","longitude"]].drop_duplicates()
     return out.reset_index(drop=True)
+
+def _valid_mask(lat_series, lon_series):
+    return pd.Series([_valid_latlon(a,b) for a,b in zip(lat_series, lon_series)], index=lat_series.index)
 
 def clean_visits(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -73,8 +96,9 @@ def clean_visits(df: pd.DataFrame) -> pd.DataFrame:
     out = out.rename(columns={emp:"employee_name",cli:"client_name",dt:"visit_datetime",latlon:"latlon",nik:"nik",div:"divisi"})
     out["visit_datetime"] = pd.to_datetime(out["visit_datetime"], errors="coerce")
     lat, lon = zip(*out["latlon"].apply(split_latlon))
-    out["lat"] = lat
-    out["long"] = lon
+    out["lat"] = pd.Series(lat, index=out.index).apply(_to_float)
+    out["long"] = pd.Series(lon, index=out.index).apply(_to_float)
+    out.loc[~_valid_mask(out["lat"], out["long"]), ["lat","long"]] = np.nan
     out["nik"] = out.get("nik", pd.Series("", index=out.index)).astype(str)
     out["divisi"] = out.get("divisi", pd.Series("", index=out.index)).astype(str)
     out = out[~out["nik"].str.contains("deleted-", case=False, na=False)]
@@ -90,6 +114,7 @@ def assign_visits_to_dealers(visits: pd.DataFrame, dealers: pd.DataFrame, max_km
         v["matched_client"] = pd.NA
         return v
     d = dealers[["id_dealer_outlet","name","latitude","longitude","city","brand"]].dropna().copy()
+    d = d[_valid_mask(d["latitude"], d["longitude"])]
     v = visits.copy()
     left = v.merge(d[["id_dealer_outlet","name"]], left_on="client_name", right_on="name", how="left")
     v["matched_dealer_id"] = left["id_dealer_outlet"]
@@ -98,20 +123,23 @@ def assign_visits_to_dealers(visits: pd.DataFrame, dealers: pd.DataFrame, max_km
     if mask.any():
         base = v[mask].copy()
         base = base.dropna(subset=["lat","long"])
-        if not base.empty:
+        base = base[_valid_mask(base["lat"], base["long"])]
+        if not base.empty and not d.empty:
             dv = d[["id_dealer_outlet","name","latitude","longitude"]].dropna().copy()
-            def nearest(row):
-                lat, lon = row["lat"], row["long"]
-                if pd.isna(lat) or pd.isna(lon):
-                    return pd.Series([pd.NA, pd.NA])
-                dist = dv.apply(lambda r: geopy.distance.geodesic((lat,lon),(r.latitude,r.longitude)).km, axis=1)
-                dv_ = dv.assign(_km=dist).sort_values("_km")
-                if dv_.empty or float(dv_["_km"].iloc[0]) > max_km:
-                    return pd.Series([pd.NA, pd.NA])
-                return pd.Series([dv_.iloc[0]["id_dealer_outlet"], dv_.iloc[0]["name"]])
-            nn = base.apply(nearest, axis=1)
-            v.loc[base.index, "matched_dealer_id"] = nn.iloc[:,0].values
-            v.loc[base.index, "matched_client"] = nn.iloc[:,1].values
+            dv = dv[_valid_mask(dv["latitude"], dv["longitude"])]
+            if not dv.empty:
+                def nearest(row):
+                    lat, lon = row["lat"], row["long"]
+                    if not _valid_latlon(lat, lon):
+                        return pd.Series([pd.NA, pd.NA])
+                    dist = dv.apply(lambda r: _km(lat, lon, r.latitude, r.longitude), axis=1)
+                    dv_ = dv.assign(_km=dist).sort_values("_km")
+                    if dv_.empty or not np.isfinite(dv_["_km"].iloc[0]) or float(dv_["_km"].iloc[0]) > max_km:
+                        return pd.Series([pd.NA, pd.NA])
+                    return pd.Series([dv_.iloc[0]["id_dealer_outlet"], dv_.iloc[0]["name"]])
+                nn = base.apply(nearest, axis=1)
+                v.loc[base.index, "matched_dealer_id"] = nn.iloc[:,0].values
+                v.loc[base.index, "matched_client"] = nn.iloc[:,1].values
     return v
 
 def prepare_run_order(running_order: pd.DataFrame) -> pd.DataFrame:
@@ -147,8 +175,10 @@ def cluster_by_bde(visits: pd.DataFrame, dealers: pd.DataFrame):
     for name in names:
         v = visits[visits["employee_name"]==name][["visit_datetime","client_name","lat","long"]].dropna().copy()
         v = v.rename(columns={"lat":"latitude","long":"longitude"})
+        v = v[_valid_mask(v["latitude"], v["longitude"])]
         v["sales_name"] = name
         dbox = dealers.copy()
+        dbox = dbox[_valid_mask(dbox["latitude"], dbox["longitude"])]
         dbox["sales_name"] = name
         if len(v) >= 4:
             X = v[["latitude","longitude"]].values.tolist()
@@ -169,14 +199,16 @@ def cluster_by_bde(visits: pd.DataFrame, dealers: pd.DataFrame):
             for i in range(len(centers)):
                 latc, lonc = centers.loc[i,"latitude"], centers.loc[i,"longitude"]
                 avails_i = dbox.copy()
-                avails_i[f"dist_center_{i}"] = avails_i.apply(lambda x: geopy.distance.geodesic((latc,lonc),(x.latitude,x.longitude)).km, axis=1)
+                avails_i[f"dist_center_{i}"] = avails_i.apply(lambda x: _km(latc, lonc, x.latitude, x.longitude), axis=1)
                 avails.append(avails_i)
             cl_centers.append(centers)
         else:
             v["cluster"] = 0
-            centers = pd.DataFrame([[v["latitude"].mean(), v["longitude"].mean(), name, 0]], columns=["latitude","longitude","sales_name","cluster"])
+            latm = float(v["latitude"].mean()) if len(v) else np.nan
+            lonm = float(v["longitude"].mean()) if len(v) else np.nan
+            centers = pd.DataFrame([[latm, lonm, name, 0]], columns=["latitude","longitude","sales_name","cluster"])
             avails_i = dbox.copy()
-            avails_i["dist_center_0"] = avails_i.apply(lambda x: geopy.distance.geodesic((centers.iloc[0,0],centers.iloc[0,1]),(x.latitude,x.longitude)).km, axis=1)
+            avails_i["dist_center_0"] = avails_i.apply(lambda x: _km(latm, lonm, x.latitude, x.longitude), axis=1)
             avails.append(avails_i)
             cl_centers.append(centers)
         sums.append(v)
@@ -196,7 +228,7 @@ def get_summary_data(visits: pd.DataFrame):
     agg["avg_distance_km"] = 0.0
     agg["avg_time_between_minute"] = 0.0
     agg["avg_speed_kmpm"] = 0.0
-    agg["month_year"] = pd.to_datetime(agg["date"]).astype("datetime64[M]").astype(str)
+    agg["month_year"] = pd.to_datetime(agg["date"]).astype("datetime64[M]").astype str
     return v, agg
 
 def compute_all():
