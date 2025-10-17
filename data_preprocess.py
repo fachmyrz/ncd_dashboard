@@ -171,7 +171,7 @@ def cluster_by_bde(visits: pd.DataFrame, dealers: pd.DataFrame):
     sums = []
     cl_centers = []
     avails = []
-    names = visits["employee_name"].dropna().unique().tolist()
+    names = visits["employee_name"].dropna().unique().tolist() if "employee_name" in visits.columns else []
     for name in names:
         v = visits[visits["employee_name"]==name][["visit_datetime","client_name","lat","long"]].dropna().copy()
         v = v.rename(columns={"lat":"latitude","long":"longitude"})
@@ -233,11 +233,11 @@ def get_summary_data(visits: pd.DataFrame):
 
 def compute_all():
     sheets = get_sheets()
-    dealers_raw = sheets["dealers"]
-    visits_raw = sheets["visits"]
-    location_detail = sheets["location_detail"]
-    need_cluster = sheets["need_cluster"]
-    running_order = sheets["running_order"]
+    dealers_raw = sheets.get("dealers", pd.DataFrame())
+    visits_raw = sheets.get("visits", pd.DataFrame())
+    location_detail = sheets.get("location_detail", pd.DataFrame())
+    need_cluster = sheets.get("need_cluster", pd.DataFrame())
+    running_order = sheets.get("running_order", pd.DataFrame())
     dealers = clean_dealers(dealers_raw)
     visits = clean_visits(visits_raw)
     visits = assign_visits_to_dealers(visits, dealers, max_km=1.0)
@@ -253,10 +253,8 @@ def compute_all():
                 vc = pd.to_numeric(avail_df[c], errors="coerce")
                 mask = np.isfinite(vc) & np.isfinite(mvals) & np.isclose(vc, mvals, rtol=0, atol=1e-9)
                 avail_df[c] = np.where(mask, vc, np.nan)
-    return {
-        "dealers": dealers,
-        "visits": visits,
-        "sum_df": sum_df,
-        "clust_df": clust_df,
-        "avail_df_merge": avail_df_merge,
-    }
+            try:
+                avail_df_merge = avail_df_merge.merge(avail_df[["id_dealer_outlet"]+dist_cols], on="id_dealer_outlet", how="left")
+            except Exception:
+                pass
+    return {"dealers": dealers, "visits": visits, "sum_df": sum_df, "clust_df": clust_df, "avail_df_merge": avail_df_merge}
