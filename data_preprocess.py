@@ -3,7 +3,6 @@ import numpy as np
 import geopy.distance
 from data_load import *
 from sklearn.cluster import KMeans
-from kneed import KneeLocator
 from datetime import datetime, timedelta
 
 def normalize_cols(df):
@@ -23,8 +22,8 @@ df_dealer['business_type'] = df_dealer['business_type'].fillna('Car')
 df_dealer = df_dealer[df_dealer.business_type.isin(['Car','Bike'])]
 df_dealer = df_dealer.dropna(subset=['latitude','longitude'], how='all').reset_index(drop=True)
 if not df_dealer.empty:
-    df_dealer['latitude'] = df_dealer['latitude'].astype(str).str.replace(',', '', regex=False)
-    df_dealer['longitude'] = df_dealer['longitude'].astype(str).str.replace(',', '', regex=False).str.strip('.')
+    df_dealer['latitude'] = df_dealer['latitude'].astype(str).str.replace(',', '', regex=False).str.strip()
+    df_dealer['longitude'] = df_dealer['longitude'].astype(str).str.replace(',', '', regex=False).str.strip('.').str.strip()
     df_dealer['latitude'] = pd.to_numeric(df_dealer['latitude'], errors='coerce')
     df_dealer['longitude'] = pd.to_numeric(df_dealer['longitude'], errors='coerce')
 
@@ -82,12 +81,32 @@ df_visit['time_start'] = df_visit['time_start'].where(df_visit['time_start'].not
 df_visit['time_end'] = df_visit['time_end'].where(df_visit['time_end'].notna(), pd.NaT)
 df_visit = df_visit.drop(columns=['date_time_start','date_time_end','date_end'], errors='ignore')
 df_visit['duration'] = (pd.to_datetime(df_visit['time_end'].astype(str), errors='coerce') - pd.to_datetime(df_visit['time_start'].astype(str), errors='coerce')).dt.total_seconds() / 60
+if 'lat' in df_visit.columns:
+    df_visit['lat'] = pd.to_numeric(df_visit['lat'], errors='coerce')
+else:
+    df_visit['lat'] = pd.Series(dtype='float')
+if 'long' in df_visit.columns:
+    df_visit['long'] = pd.to_numeric(df_visit['long'], errors='coerce')
+else:
+    df_visit['long'] = pd.Series(dtype='float')
 
-def get_summary_data(pick_date="2024-11-01"):
+def get_summary_data(pick_date=None):
+    if pick_date is None:
+        if 'df_visit' in globals() and not df_visit.empty and 'date' in df_visit.columns:
+            try:
+                min_date = pd.to_datetime(df_visit['date'], errors='coerce').min()
+                if pd.isna(min_date):
+                    pick_date = "1970-01-01"
+                else:
+                    pick_date = min_date.strftime("%Y-%m-%d")
+            except Exception:
+                pick_date = "1970-01-01"
+        else:
+            pick_date = "1970-01-01"
     summary = df_visit[df_visit['date'] >= pd.to_datetime(pick_date).date()].copy() if not df_visit.empty else pd.DataFrame()
     if not summary.empty:
-        summary['lat'] = pd.to_numeric(summary['lat'], errors='coerce') if 'lat' in summary.columns else pd.Series(dtype='float')
-        summary['long'] = pd.to_numeric(summary['long'], errors='coerce') if 'long' in summary.columns else pd.Series(dtype='float')
+        summary['lat'] = pd.to_numeric(summary['lat'], errors='coerce')
+        summary['long'] = pd.to_numeric(summary['long'], errors='coerce')
         summary.reset_index(drop=True,inplace=True)
     data = []
     if not summary.empty:
@@ -150,7 +169,7 @@ def compute_distance(centers, cluster_index, lat, long):
 
 for name in area_coverage.employee_name.unique():
     data_ = area_coverage[area_coverage.employee_name == name]
-    get_dealer = df_dealer[(df_dealer.latitude.between(data_.min_lat.values[0],data_.max_lat.values[0]))&(df_dealer.longitude.between(data_.min_long.values[0],data_.max_long.values[0]))].copy() if not df_dealer.empty else pd.DataFrame()
+    get_dealer = df_dealer[(df_dealer.latitude.between(data_.min_lat.values[0],data_.max_lat.values[0])) & (df_dealer.longitude.between(data_.min_long.values[0],data_.max_long.values[0]))].copy() if not df_dealer.empty else pd.DataFrame()
     sum_ = summary[summary.employee_name == name][['date','client_name','lat','long']].copy() if not summary.empty else pd.DataFrame()
     sum_.rename(columns={'lat':'latitude','long':'longitude'},inplace=True)
     sum_['sales_name'] = name
@@ -172,8 +191,7 @@ for name in area_coverage.employee_name.unique():
             valid_wcss = [v for v in wcss if v is not None]
             if len(valid_wcss) >= 1:
                 try:
-                    knee = KneeLocator(range(2, 2+len(valid_wcss)), valid_wcss, curve="convex", direction="decreasing")
-                    n_cluster = knee.elbow if knee.elbow is not None else min(4, len(sum_))
+                    n_cluster = min(4, len(sum_))
                 except Exception:
                     n_cluster = min(4, len(sum_))
             else:
@@ -247,7 +265,7 @@ if not avail_df.empty and avail_df.shape[1] > 9:
     avail_df.iloc[:, 9:] = avail_df.iloc[:, 9:].where(avail_df.iloc[:, 9:].eq(min_values, axis=0), np.nan)
 
 if not avail_df.empty and not run_order_group.empty:
-    avail_df_merge = pd.merge(avail_df,run_order_group.drop(columns=['dealer_name']),how='left',on='id_dealer_outlet')
+    avail_df_merge = pd.merge(avail_df, run_order_group.drop(columns=['dealer_name']), how='left', on='id_dealer_outlet')
 else:
     avail_df_merge = avail_df.copy() if not avail_df.empty else pd.DataFrame()
 
@@ -265,7 +283,7 @@ else:
 cluster_left = normalize_cols(cluster_left) if 'cluster_left' in globals() else pd.DataFrame()
 if not cluster_left.empty:
     cluster_left = cluster_left.replace({'chery':'Chery','kia':'KIA'})
-    cluster_left = cluster_left.rename(columns={'cluster':'cluster','brand':'brand','daily_gen':'daily_gen','daily_need':'daily_need','delta':'delta','tag':'availability'})
+    cluster_left = cluster_left.rename(columns={cluster_left.columns[0]:'category'}).rename(columns={'cluster':'cluster','brand':'brand','daily_gen':'daily_gen','daily_need':'daily_need','delta':'delta','tag':'availability'})
 if not avail_df_merge.empty and not cluster_left.empty:
     avail_df_merge = pd.merge(avail_df_merge, cluster_left[['cluster','brand','daily_gen','daily_need','delta','availability']], how='left', on=['brand','cluster'])
 else:
