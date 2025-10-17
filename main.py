@@ -5,7 +5,8 @@ import streamlit as st
 import pydeck as pdk
 from pydeck.types import String
 from PIL import Image
-from data_preprocess import compute_all
+from data_load import get_sheets
+from data_preprocess import clean_dealers, clean_visits, compute_all
 
 def _safe_icon():
     try:
@@ -42,30 +43,24 @@ def _center_of(df, lat_col="latitude", lon_col="longitude"):
 st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon=_safe_icon(), layout="wide")
 st.markdown("<h1 style='font-size:40px;margin:0'>Dealer Penetration Dashboard</h1>", unsafe_allow_html=True)
 
-computed = compute_all()
-dealers = computed.get("dealers", pd.DataFrame())
-visits = computed.get("visits", pd.DataFrame())
-sum_df = computed.get("sum_df", pd.DataFrame())
-clust_df = computed.get("clust_df", pd.DataFrame())
-avail_df_merge = computed.get("avail_df_merge", pd.DataFrame())
+sheets = get_sheets()
+dealers_raw = sheets.get("dealers", pd.DataFrame())
+visits_raw = sheets.get("visits", pd.DataFrame())
+dealers_light = clean_dealers(dealers_raw) if not dealers_raw.empty else pd.DataFrame()
+visits_light = clean_visits(visits_raw) if not visits_raw.empty else pd.DataFrame()
 
-if dealers.empty:
+if dealers_light.empty:
     st.info("No dealer data — check your Google Sheet IDs/tabs in secrets.")
     st.stop()
 
 _dealer_required = {"id_dealer_outlet": pd.NA, "brand": "", "city": "", "name": "", "latitude": np.nan, "longitude": np.nan}
-dealers = _ensure_cols(dealers.copy(), _dealer_required)
-dealers = _coerce_float(dealers, ["latitude", "longitude"])
-dealers = _finite_mask(dealers, "latitude", "longitude")
+dealers_light = _ensure_cols(dealers_light.copy(), _dealer_required)
+dealers_light = _coerce_float(dealers_light, ["latitude", "longitude"])
+dealers_light = _finite_mask(dealers_light, "latitude", "longitude")
 
-bde_base = visits[["employee_name"]].drop_duplicates() if not visits.empty and "employee_name" in visits.columns else pd.DataFrame(columns=["employee_name"])
-bde_list = ["All"] + sorted(bde_base["employee_name"].dropna().astype(str).unique().tolist())
-
-if "city" not in dealers.columns:
-    dealers["city"] = ""
-cities = sorted([c for c in dealers["city"].dropna().astype(str).unique().tolist() if c])
-
-brands = sorted([b for b in dealers["brand"].dropna().astype(str).unique().tolist() if b])
+bde_list = ["All"] + sorted(visits_light["employee_name"].dropna().astype(str).unique().tolist()) if "employee_name" in visits_light.columns else ["All"]
+cities = sorted([c for c in dealers_light["city"].dropna().astype(str).unique().tolist() if c])
+brands = sorted([b for b in dealers_light["brand"].dropna().astype(str).unique().tolist() if b])
 
 with st.container():
     c1, c2, c3, c4 = st.columns([1.2,1.2,1.2,0.8])
@@ -92,6 +87,21 @@ btn = st.button("Apply Filters", type="primary", use_container_width=True)
 if not btn:
     st.info("Set filters and click Apply Filters.")
     st.stop()
+
+with st.status("Loading data and computing clusters…", expanded=True) as s:
+    try:
+        computed = compute_all()
+        s.update(label="Computation done.")
+    except Exception as e:
+        s.update(label="Failed to compute data.")
+        st.exception(e)
+        st.stop()
+
+dealers = computed.get("dealers", pd.DataFrame())
+visits = computed.get("visits", pd.DataFrame())
+sum_df = computed.get("sum_df", pd.DataFrame())
+clust_df = computed.get("clust_df", pd.DataFrame())
+avail_df_merge = computed.get("avail_df_merge", pd.DataFrame())
 
 df = avail_df_merge.copy()
 df = _ensure_cols(df, {
