@@ -20,7 +20,7 @@ avail_df_merge = computed.get("avail_df_merge", pd.DataFrame())
 df_visits = computed.get("df_visits", pd.DataFrame())
 revenue_monthly = computed.get("revenue_monthly", pd.DataFrame())
 
-sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Ahlan','Samin Jaya']
+sales_jabo = ['A. Sofyan','Nova Handoyo','Heriyanto','Aditya rifat','Riski Amrullah Zulkarnain','Rudy Setya Wibowo','Muhammad Achlan','Samin Jaya']
 jabodetabek_cities = ['Bekasi','Bogor','Depok','Jakarta Barat','Jakarta Pusat','Jakarta Selatan','Jakarta Timur','Jakarta Utara','Tangerang','Tangerang Selatan','Cibitung','Tambun','Cikarang','Karawaci','Alam Sutera','Cileungsi','Sentul','Cibubur','Bintaro']
 
 st.markdown("<h1 style='font-size:40px;margin:0'>Filter for Recommendation</h1>", unsafe_allow_html=True)
@@ -168,3 +168,4 @@ if button:
                 st.dataframe(df_shown.reset_index(drop=True))
             st.markdown("<h2 style='font-size:20px;margin:8px 0'>Dealers Detail</h2>", unsafe_allow_html=True)
             area_output(dealers)
+
