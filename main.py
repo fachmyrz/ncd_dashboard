@@ -1,229 +1,210 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import streamlit as st
 import pydeck as pdk
-from data_load import get_sheets
-from data_preprocess import enhanced_preprocessing
+from pydeck.types import String
+from PIL import Image
+from data_load import get_sheets, clear_cache
+from data_preprocess import compute_all
 
-# Page configuration
-st.set_page_config(
-    page_title="Dealer Penetration Dashboard",
-    page_icon="🏢",
-    layout="wide",
-    initial_sidebar_state="expanded"
+st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon=Image.open("assets/favicon.png"), layout="wide")
+st.sidebar.button("Refresh Data (force)", on_click=clear_cache)
+
+st.markdown("<h1 style='font-size:40px;margin:0'>Dealer Penetration Dashboard</h1>", unsafe_allow_html=True)
+
+computed = compute_all()
+dealers = computed["dealers"]
+visits = computed["visits"]
+sum_df = computed["sum_df"]
+clust_df = computed["clust_df"]
+avail_df_merge = computed["avail_df_merge"]
+
+if dealers.empty:
+    st.info("No dealer data — check your sheet ids / sheet names in Streamlit secrets.")
+    st.stop()
+
+bde_base = visits[["employee_name","nik","divisi"]].drop_duplicates() if not visits.empty else pd.DataFrame(columns=["employee_name","nik","divisi"])
+bde_list = ["All"] + sorted(bde_base["employee_name"].dropna().astype(str).unique().tolist())
+
+ld = get_sheets()["location_detail"].rename(columns={"City":"city","Cluster":"cluster"})
+area_order = dealers.merge(ld[["city","cluster"]], on="city", how="left").groupby("cluster", as_index=False)["id_dealer_outlet"].count().sort_values("id_dealer_outlet", ascending=False)["cluster"].astype(str).dropna().tolist()
+area_choices = ["All"] + area_order
+
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+with st.container():
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        bde = st.selectbox("BDE Name", bde_list, index=0)
+    with c2:
+        area_pick = st.multiselect("Area", area_choices, default=["All"])
+        if "All" in area_pick:
+            area_pick = area_choices[1:] if len(area_choices)>1 else []
+    with c3:
+        radius = st.slider("Radius (km)", 0, 50, 15)
+
+c4, c5, c6 = st.columns(3)
+with c4:
+    penetrated = st.multiselect("Dealer Activity", ["All","Not Active","Not Penetrated","Active"], default=["All"])
+with c5:
+    potential = st.multiselect("Dealer Availability", ["All","Potential","Low Generation","Deficit"], default=["All"])
+with c6:
+    city_pool = dealers["city"].dropna().unique().tolist()
+    city_pick = st.multiselect("City", ["All"] + city_pool, default=["All"])
+    if "All" in city_pick:
+        city_pick = city_pool
+
+brand_pool = dealers["brand"].dropna().unique().tolist()
+brand = st.multiselect("Brand", ["All"] + brand_pool, default=["All"])
+if "All" in brand:
+    brand = brand_pool
+
+btn = st.button("Submit", use_container_width=True)
+
+if not btn:
+    st.info("Set filters and click Submit.")
+    st.stop()
+
+df = avail_df_merge.copy()
+df["nearest_end_date"] = pd.to_datetime(df["nearest_end_date"], errors="coerce")
+df["status_days_to_expire"] = (df["nearest_end_date"] - pd.Timestamp.today().normalize()).dt.days
+df["will_expire_30d"] = np.where(df["status_days_to_expire"].between(0,30, inclusive="both"), True, False)
+df["tag"] = np.where((df["joined_dse"].fillna(0)==0) & (df["active_dse"].fillna(0)==0), "Not Penetrated", df["tag"])
+df["availability"] = df["availability"].fillna("Potential")
+df["cluster"] = df["cluster"].astype(str)
+if bde != "All" and not sum_df.empty:
+    picks = []
+    n_clusters = len(sum_df[sum_df["sales_name"]==bde]["cluster"].unique())
+    for i in range(n_clusters):
+        col = f"dist_center_{i}"
+        if col in df.columns:
+            tp = df[(df[col].notna()) & (df[col] <= radius)].copy()
+            tp["cluster_labels"] = i
+            tp["sales_name"] = bde
+            picks.append(tp)
+    if picks:
+        df_pick = pd.concat(picks, ignore_index=True)
+    else:
+        df_pick = df.copy()
+else:
+    df_pick = df.copy()
+
+if area_pick:
+    df_pick = df_pick[df_pick["cluster"].astype(str).isin(area_pick)]
+if penetrated and "All" not in penetrated:
+    df_pick = df_pick[df_pick["tag"].isin(penetrated)]
+if potential and "All" not in potential:
+    df_pick = df_pick[df_pick["availability"].isin(potential)]
+if city_pick:
+    df_pick = df_pick[df_pick["city"].isin(city_pick)]
+if brand:
+    df_pick = df_pick[df_pick["brand"].isin(brand)]
+
+if df_pick.empty:
+    st.info("No dealers match your filters.")
+    st.stop()
+
+df_pick["joined_dse"] = df_pick["joined_dse"].fillna(0)
+df_pick["active_dse"] = df_pick["active_dse"].fillna(0)
+df_pick["engagement_bucket"] = np.select(
+    [
+        (df_pick["active_dse"]>0),
+        (df_pick["joined_dse"]>0) & (df_pick["active_dse"]==0),
+        (df_pick["joined_dse"]==0) & (df_pick["active_dse"]==0),
+    ],
+    ["Active","Not Active","Not Penetrated"],
+    default="Not Penetrated"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 3rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 4px solid #1f77b4;
-    }
-    .section-header {
-        color: #1f77b4;
-        border-bottom: 2px solid #1f77b4;
-        padding-bottom: 0.5rem;
-        margin-top: 2rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+center_lon = float(df_pick["longitude"].mean())
+center_lat = float(df_pick["latitude"].mean())
+color_map = {"Active":[21,255,87,200],"Not Active":[255,171,171,200],"Not Penetrated":[131,201,255,200]}
+df_pick["color"] = df_pick["engagement_bucket"].map(color_map)
+df_pick["color"] = df_pick["color"].apply(lambda x: x if isinstance(x, list) else [200,200,200,180])
 
-def main():
-    # Header
-    st.markdown('<h1 class="main-header">🚗 Dealer Penetration Dashboard</h1>', unsafe_allow_html=True)
-    
-    # Load data
-    with st.spinner("Loading data..."):
-        try:
-            sheets = get_sheets()
-            processed_data = enhanced_preprocessing(
-                sheets.get('df_dealer', pd.DataFrame()),
-                sheets.get('df_visit', pd.DataFrame()),
-                sheets.get('running_order', pd.DataFrame()),
-                sheets.get('location_detail', pd.DataFrame()),
-                sheets.get('cluster_left', pd.DataFrame())
-            )
-        except Exception as e:
-            st.error(f"Error loading data: {str(e)}")
-            return
+clusters = clust_df.copy()
+if not clusters.empty and bde != "All":
+    clusters = clusters[clusters["sales_name"]==bde]
+if not clusters.empty:
+    visits_cnt = sum_df.groupby(["sales_name","cluster"], as_index=False)["cluster"].count().rename(columns={"cluster":"count_visit"})
+    clusters = clusters.merge(visits_cnt, on=["sales_name","cluster"], how="left")
+    total_vis = max(clusters["count_visit"].fillna(0).sum(), 1)
+    clusters["size"] = clusters["count_visit"].fillna(0)/total_vis*9000
+    clusters["word"] = "Area " + (clusters["cluster"].astype(int)+1).astype(str) + "\nCount Visit: " + clusters["count_visit"].fillna(0).astype(int).astype(str)
+else:
+    clusters = pd.DataFrame(columns=["latitude","longitude","size","word"])
+    clusters = pd.concat([clusters, pd.DataFrame([{"latitude":center_lat,"longitude":center_lon,"size":5000,"word":"Area"}])], ignore_index=True)
 
-    # Sidebar filters
-    st.sidebar.markdown("## 🔧 Filters")
-    
-    # Employee filter
-    employees = processed_data['visits_clean']['employee_name'].unique() if not processed_data['visits_clean'].empty else []
-    selected_employee = st.sidebar.selectbox("Select Employee", options=['All'] + list(employees))
-    
-    # Date range filter
-    if not processed_data['visits_clean'].empty:
-        min_date = processed_data['visits_clean']['date'].min()
-        max_date = processed_data['visits_clean']['date'].max()
-        date_range = st.sidebar.date_input(
-            "Date Range",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date
-        )
-    
-    # Brand filter
-    brands = processed_data['dealers_clean']['brand'].unique() if not processed_data['dealers_clean'].empty else []
-    selected_brands = st.sidebar.multiselect("Brands", options=brands, default=brands[:3] if len(brands) > 3 else brands)
-    
-    # City filter
-    cities = processed_data['dealers_clean']['city'].unique() if not processed_data['dealers_clean'].empty else []
-    selected_cities = st.sidebar.multiselect("Cities", options=cities, default=cities[:3] if len(cities) > 3 else cities)
+deck = pdk.Deck(
+    map_style=None,
+    initial_view_state=pdk.ViewState(longitude=center_lon, latitude=center_lat, zoom=10, pitch=50),
+    tooltip={"text":"Dealer: {name}\nBrand: {brand}\nAvailability: {availability}\nActivity: {engagement_bucket}"},
+    layers=[
+        pdk.Layer(
+            "TextLayer",
+            data=clusters,
+            get_position="[longitude,latitude]",
+            get_text="word",
+            get_size=12,
+            get_color=[0,1000,0],
+            get_text_anchor=String("middle"),
+            get_alignment_baseline=String("center"),
+        ),
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=df_pick,
+            get_position="[longitude,latitude]",
+            get_radius=200,
+            get_fill_color="color",
+            pickable=True,
+            auto_highlight=True,
+        ),
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=clusters,
+            get_position="[longitude,latitude]",
+            get_radius="size",
+            get_fill_color=[200,30,0,90],
+        ),
+    ],
+)
 
-    # Main dashboard
-    if processed_data['visits_clean'].empty or processed_data['dealers_clean'].empty:
-        st.warning("No data available. Please check your data sources.")
-        return
+st.markdown("<h2 style='font-size:24px;margin:8px 0'>Penetration Map</h2>", unsafe_allow_html=True)
+st.pydeck_chart(deck)
 
-    # Key Metrics
-    st.markdown("## 📊 Key Performance Indicators")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        total_visits = len(processed_data['visits_clean'])
-        st.metric("Total Visits", f"{total_visits:,}")
-    
-    with col2:
-        total_dealers = len(processed_data['dealers_clean'])
-        st.metric("Total Dealers", f"{total_dealers:,}")
-    
-    with col3:
-        active_employees = processed_data['visits_clean']['employee_name'].nunique()
-        st.metric("Active Employees", active_employees)
-    
-    with col4:
-        avg_visits_per_employee = total_visits / active_employees if active_employees > 0 else 0
-        st.metric("Avg Visits/Employee", f"{avg_visits_per_employee:.1f}")
-
-    # Performance Charts
-    st.markdown('<h2 class="section-header">📈 Performance Analytics</h2>', unsafe_allow_html=True)
-    
-    if not processed_data['performance_df'].empty:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Visits over time
-            visits_trend = processed_data['visits_clean'].groupby('date').size().reset_index(name='visits')
-            fig_visits = px.line(visits_trend, x='date', y='visits', title='Daily Visits Trend')
-            st.plotly_chart(fig_visits, use_container_width=True)
-        
-        with col2:
-            # Employee performance
-            employee_perf = processed_data['performance_df'].groupby('employee_name').agg({
-                'total_visits': 'sum',
-                'avg_distance_km': 'mean'
-            }).reset_index()
-            
-            fig_employee = px.bar(employee_perf, x='employee_name', y='total_visits', 
-                                title='Total Visits by Employee')
-            st.plotly_chart(fig_employee, use_container_width=True)
-
-    # Dealer Map
-    st.markdown('<h2 class="section-header">🗺️ Dealer Locations</h2>', unsafe_allow_html=True)
-    
-    # Filter dealers
-    filtered_dealers = processed_data['dealers_clean'].copy()
-    if selected_brands:
-        filtered_dealers = filtered_dealers[filtered_dealers['brand'].isin(selected_brands)]
-    if selected_cities:
-        filtered_dealers = filtered_dealers[filtered_dealers['city'].isin(selected_cities)]
-    
-    if not filtered_dealers.empty:
-        # Create map
-        view_state = pdk.ViewState(
-            latitude=filtered_dealers['latitude'].mean(),
-            longitude=filtered_dealers['longitude'].mean(),
-            zoom=10,
-            pitch=50
-        )
-        
-        dealer_layer = pdk.Layer(
-            'ScatterplotLayer',
-            data=filtered_dealers,
-            get_position=['longitude', 'latitude'],
-            get_color=[255, 0, 0, 160],
-            get_radius=500,
-            pickable=True
-        )
-        
-        tooltip = {
-            "html": "<b>Dealer:</b> {name}<br><b>Brand:</b> {brand}<br><b>City:</b> {city}",
-            "style": {"backgroundColor": "steelblue", "color": "white"}
-        }
-        
-        st.pydeck_chart(pdk.Deck(
-            map_style='mapbox://styles/mapbox/light-v9',
-            initial_view_state=view_state,
-            layers=[dealer_layer],
-            tooltip=tooltip
-        ))
-
-    # Dealer Analysis
-    st.markdown('<h2 class="section-header">🏢 Dealer Analysis</h2>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Brand distribution
-        brand_dist = filtered_dealers['brand'].value_counts().reset_index()
-        brand_dist.columns = ['Brand', 'Count']
-        fig_brand = px.pie(brand_dist, values='Count', names='Brand', title='Dealer Distribution by Brand')
-        st.plotly_chart(fig_brand, use_container_width=True)
-    
-    with col2:
-        # City distribution
-        city_dist = filtered_dealers['city'].value_counts().head(10).reset_index()
-        city_dist.columns = ['City', 'Count']
-        fig_city = px.bar(city_dist, x='City', y='Count', title='Top 10 Cities by Dealer Count')
-        st.plotly_chart(fig_city, use_container_width=True)
-
-    # Raw Data Section
-    st.markdown('<h2 class="section-header">📋 Data Overview</h2>', unsafe_allow_html=True)
-    
-    tab1, tab2, tab3 = st.tabs(["Dealers", "Visits", "Performance"])
-    
-    with tab1:
-        st.dataframe(filtered_dealers, use_container_width=True)
-    
-    with tab2:
-        st.dataframe(processed_data['visits_clean'], use_container_width=True)
-    
-    with tab3:
-        if not processed_data['performance_df'].empty:
-            st.dataframe(processed_data['performance_df'], use_container_width=True)
-        else:
-            st.info("No performance data available")
-
-    # Recommendations Section
-    st.markdown('<h2 class="section-header">💡 Recommendations</h2>', unsafe_allow_html=True)
-    
-    if not processed_data['dealer_clusters'].empty:
-        # Show cluster-based recommendations
-        cluster_recommendations = processed_data['dealer_clusters'].groupby(['employee_name', 'cluster_id']).agg({
-            'name': 'count',
-            'distance_to_center': 'mean'
-        }).reset_index()
-        
-        st.write("**Dealer Clusters for Optimization:**")
-        st.dataframe(cluster_recommendations, use_container_width=True)
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+with kpi1:
+    st.metric("Dealers", int(df_pick["id_dealer_outlet"].nunique()))
+with kpi2:
+    st.metric("Active Dealers", int((df_pick["active_dse"].fillna(0)>0).sum()))
+with kpi3:
+    st.metric("Active DSE", int(df_pick["active_dse"].fillna(0).sum()))
+with kpi4:
+    wv = visits.dropna(subset=["visit_datetime"]).copy()
+    if "matched_dealer_id" in wv.columns:
+        wv["week"] = wv["visit_datetime"].dt.to_period("W").astype(str)
+        avg_week = wv.groupby("matched_dealer_id")["week"].nunique().mean()
+        st.metric("Avg Weekly Visits", round(float(avg_week if pd.notna(avg_week) else 0),2))
     else:
-        st.info("Cluster analysis data not available")
+        st.metric("Avg Weekly Visits", 0)
 
-if __name__ == "__main__":
-    main()
+area_col = "cluster"
+df_pick["area_tag_word"] = "Area " + df_pick.get("cluster_labels", pd.Series(0, index=df_pick.index)).fillna(0).astype(int).add(1).astype(str)
+df_pick["area"] = df_pick[area_col].astype(str)
+
+st.markdown("<h2 style='font-size:24px;margin:8px 0'>Insights</h2>", unsafe_allow_html=True)
+bar_src = df_pick.groupby(["brand","engagement_bucket"], as_index=False)["id_dealer_outlet"].count().rename(columns={"id_dealer_outlet":"Count Dealers","brand":"Brand","engagement_bucket":"Status"})
+fig = px.bar(bar_src, x="Brand", y="Count Dealers", color="Status", barmode="group")
+fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+st.plotly_chart(fig, use_container_width=True, key="bar_brand_status")
+
+pie_src = df_pick.groupby(["availability"], as_index=False)["id_dealer_outlet"].count().rename(columns={"id_dealer_outlet":"Total"})
+pie = px.pie(pie_src, names="availability", values="Total", hole=0.35)
+st.plotly_chart(pie, use_container_width=True, key="pie_avail")
+
+st.markdown("<h2 style='font-size:24px;margin:8px 0'>Dealers Detail</h2>", unsafe_allow_html=True)
+show_cols = ["brand","name","city","tag","joined_dse","active_dse","nearest_end_date","availability","will_expire_30d"]
+df_table = df_pick[show_cols].rename(columns={"brand":"Brand","name":"Dealer Name","city":"City","tag":"Activity","joined_dse":"Total Joined DSE","active_dse":"Total Active DSE","nearest_end_date":"Nearest Package End Date","availability":"Availability","will_expire_30d":"Expire <=30d"})
+df_table = df_table.drop_duplicates().reset_index(drop=True)
+st.dataframe(df_table, use_container_width=True)
