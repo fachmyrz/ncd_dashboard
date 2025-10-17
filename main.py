@@ -207,8 +207,11 @@ if button and name != "" and penetrated != "" and potential != "" and 'city_pick
         )
     )
 
-    def some_output(area):
-        df_output = dealer_rec[dealer_rec.get('area_tag_word') == area].copy() if not dealer_rec.empty else pd.DataFrame()
+    def some_output(area=None):
+        if area is None:
+            df_output = dealer_rec.copy() if not dealer_rec.empty else pd.DataFrame()
+        else:
+            df_output = dealer_rec[dealer_rec.get('area_tag_word') == area].copy() if not dealer_rec.empty else pd.DataFrame()
         if not df_output.empty:
             df_output = df_output[['brand','name','city','tag','joined_dse','active_dse','nearest_end_date','availability']].copy()
         else:
@@ -238,6 +241,9 @@ if button and name != "" and penetrated != "" and potential != "" and 'city_pick
     tab_labels = cluster_center.get('word_pick', pd.Series([], dtype=object)).unique().tolist() if not cluster_center.empty else []
     tab_labels = [t for t in tab_labels if pd.notna(t)]
     tab_labels.sort()
-    for tab,area_label in zip(st.tabs(tab_labels),tab_labels):
-        with tab:
-            some_output(area_label)
+    if len(tab_labels) == 0:
+        some_output(None)
+    else:
+        for tab,area_label in zip(st.tabs(tab_labels),tab_labels):
+            with tab:
+                some_output(area_label)
