@@ -9,7 +9,14 @@ from data_load import cluster_left, location_detail, df_visit, df_dealer, runnin
 pd.options.mode.copy_on_write = True
 
 def _to_float_series(s):
-    return pd.to_numeric(pd.Series(s, dtype="object").astype(str).str.replace(",", "", regex=False).str.replace("`", "", regex=False).str.strip(), errors="coerce")
+    return pd.to_numeric(
+        pd.Series(s, dtype="object")
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("`", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
 
 def _before_at(x):
     x = "" if x is None else str(x)
@@ -186,12 +193,12 @@ if not avail_df.empty:
 
 dist_cols = [c for c in avail_df.columns if c.startswith("dist_center_")]
 if dist_cols:
-    vals_min = avail_df[dist_cols].apply(pd.to_numeric, errors="coerce")
-    min_values = vals_min.min(axis=1)
+    vals_num = avail_df[dist_cols].apply(pd.to_numeric, errors="coerce").astype(float)
+    min_values = vals_num.min(axis=1)
     for c in dist_cols:
-        vals = pd.to_numeric(avail_df[c], errors="coerce")
-        mask = np.isfinite(vals) & np.isfinite(min_values) & np.isclose(vals, min_values, rtol=0, atol=1e-6)
-        avail_df[c] = np.where(mask, vals, np.nan)
+        vc = pd.to_numeric(avail_df[c], errors="coerce").astype(float)
+        mask = np.isclose(vc.to_numpy(), min_values.to_numpy(), rtol=0, atol=1e-6)
+        avail_df[c] = np.where(mask, vc, np.nan)
 
 avail_df_merge = avail_df.merge(grouped_run_order, how="left", on="id_dealer_outlet")
 ld = location_detail.rename(columns={"City":"city","Cluster":"cluster"})
