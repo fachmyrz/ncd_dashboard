@@ -41,56 +41,78 @@ def _center_of(df, lat_col="latitude", lon_col="longitude"):
     return float(df[lat_col].mean()), float(df[lon_col].mean())
 
 st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon=_safe_icon(), layout="wide")
-st.markdown("<h1 style='font-size:40px;margin:0'>Dealer Penetration Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("""
+<style>
+.block-container{padding-top:1.2rem;padding-bottom:2rem}
+h1{letter-spacing:.2px}
+[data-testid="stMetricValue"]{font-weight:700}
+div[role="radiogroup"] label{padding:4px 8px;border-radius:8px}
+.stMultiSelect [data-baseweb="select"]{border-radius:12px}
+.stSelectbox [data-baseweb="select"]{border-radius:12px}
+button[kind="primary"]{border-radius:14px}
+</style>
+""", unsafe_allow_html=True)
+st.markdown("<h1 style='font-size:42px;margin:0 0 8px 0'>Dealer Penetration Dashboard</h1>", unsafe_allow_html=True)
 
 sheets = get_sheets()
 dealers_raw = sheets.get("dealers", pd.DataFrame())
 visits_raw = sheets.get("visits", pd.DataFrame())
+location_detail = sheets.get("location_detail", pd.DataFrame()).rename(columns={"City":"city","Cluster":"cluster"})
 dealers_light = clean_dealers(dealers_raw) if not dealers_raw.empty else pd.DataFrame()
 visits_light = clean_visits(visits_raw) if not visits_raw.empty else pd.DataFrame()
+dealers_light = dealers_light.merge(location_detail[["city","cluster"]], on="city", how="left") if not dealers_light.empty and not location_detail.empty else dealers_light
 
 if dealers_light.empty:
     st.info("No dealer data — check your Google Sheet IDs/tabs in secrets.")
     st.stop()
 
-_dealer_required = {"id_dealer_outlet": pd.NA, "brand": "", "city": "", "name": "", "latitude": np.nan, "longitude": np.nan}
-dealers_light = _ensure_cols(dealers_light.copy(), _dealer_required)
-dealers_light = _coerce_float(dealers_light, ["latitude", "longitude"])
+dealers_light = _ensure_cols(dealers_light.copy(), {"id_dealer_outlet": pd.NA, "brand": "", "city": "", "cluster": "", "name": "", "latitude": np.nan, "longitude": np.nan})
+dealers_light = _coerce_float(dealers_light, ["latitude","longitude"])
 dealers_light = _finite_mask(dealers_light, "latitude", "longitude")
 
 bde_list = ["All"] + sorted(visits_light["employee_name"].dropna().astype(str).unique().tolist()) if "employee_name" in visits_light.columns else ["All"]
-cities = sorted([c for c in dealers_light["city"].dropna().astype(str).unique().tolist() if c])
-brands = sorted([b for b in dealers_light["brand"].dropna().astype(str).unique().tolist() if b])
+area_all = sorted([str(x) for x in dealers_light["cluster"].dropna().astype(str).unique().tolist() if x])
+city_all = sorted([c for c in dealers_light["city"].dropna().astype(str).unique().tolist() if c])
+brand_all = sorted([b for b in dealers_light["brand"].dropna().astype(str).unique().tolist() if b])
 
 with st.container():
-    c1, c2, c3, c4 = st.columns([1.2,1.2,1.2,0.8])
-    with c1:
+    r1c1, r1c2, r1c3, r1c4 = st.columns([1.1,1.1,1.1,0.7])
+    with r1c1:
         bde = st.selectbox("BDE Name", bde_list, index=0)
-    with c2:
-        city_pick = st.multiselect("City", ["All"] + cities, default=["All"])
-        if "All" in city_pick:
-            city_pick = cities
-    with c3:
-        brand_sel = st.multiselect("Brand", ["All"] + brands, default=["All"])
-        if "All" in brand_sel:
-            brand_sel = brands
-    with c4:
-        radius = st.slider("Radius (km)", 0, 50, 15)
+    with r1c2:
+        area_pick = st.multiselect("Area", ["All"] + area_all, default=["All"])
+    with r1c3:
+        if "All" in area_pick or not area_pick:
+            cities_pool = city_all
+        else:
+            cities_pool = sorted(dealers_light[dealers_light["cluster"].astype(str).isin(area_pick)]["city"].dropna().astype(str).unique().tolist())
+        city_pick = st.multiselect("City", ["All"] + cities_pool, default=["All"])
+    with r1c4:
+        radius = st.slider("Radius (km)", 0, 50, 15, disabled=(bde=="All"))
 
-c5, c6 = st.columns([1.5,1.5])
-with c5:
+r2c1, r2c2 = st.columns([1.1,1.1])
+with r2c1:
+    if "All" in area_pick or not area_pick:
+        brands_pool = brand_all
+    else:
+        brands_pool = sorted(dealers_light[dealers_light["cluster"].astype(str).isin(area_pick)]["brand"].dropna().astype(str).unique().tolist())
+    brand_sel = st.multiselect("Brand", ["All"] + brands_pool, default=["All"])
+with r2c2:
+    st.write("")
+
+r3c1, r3c2 = st.columns([1.1,1.1])
+with r3c1:
     penetrated = st.multiselect("Dealer Activity", ["All","Not Active","Not Penetrated","Active"], default=["All"])
-with c6:
+with r3c2:
     potential = st.multiselect("Dealer Availability", ["All","Potential","Low Generation","Deficit"], default=["All"])
 
 btn = st.button("Apply Filters", type="primary", use_container_width=True)
 if not btn:
-    st.info("Set filters and click Apply Filters.")
     st.stop()
 
-with st.status("Loading data and computing clusters…", expanded=True) as s:
+with st.status("Loading data and computing clusters…", expanded=False) as s:
     try:
-        computed = compute_all()
+        computed = compute_all(bde_filter=bde)
         s.update(label="Computation done.")
     except Exception as e:
         s.update(label="Failed to compute data.")
@@ -102,21 +124,11 @@ visits = computed.get("visits", pd.DataFrame())
 sum_df = computed.get("sum_df", pd.DataFrame())
 clust_df = computed.get("clust_df", pd.DataFrame())
 avail_df_merge = computed.get("avail_df_merge", pd.DataFrame())
+loc_df = computed.get("location_detail", pd.DataFrame()).rename(columns={"City":"city","Cluster":"cluster"})
 
 df = avail_df_merge.copy()
-df = _ensure_cols(df, {
-    "nearest_end_date": pd.NaT,
-    "joined_dse": 0,
-    "active_dse": 0,
-    "tag": "",
-    "availability": "",
-    "brand": "",
-    "city": "",
-    "name": "",
-    "latitude": np.nan,
-    "longitude": np.nan,
-    "cluster": ""
-})
+df = df.merge(loc_df[["city","cluster"]], on="city", how="left") if not loc_df.empty else df
+df = _ensure_cols(df, {"nearest_end_date": pd.NaT,"joined_dse": 0,"active_dse": 0,"tag": "","availability": "","brand": "","city": "","cluster": "","name": "","latitude": np.nan,"longitude": np.nan})
 df["nearest_end_date"] = pd.to_datetime(df["nearest_end_date"], errors="coerce")
 df["status_days_to_expire"] = (df["nearest_end_date"] - pd.Timestamp.today().normalize()).dt.days
 df["will_expire_30d"] = np.where(df["status_days_to_expire"].between(0,30, inclusive="both"), True, False)
@@ -126,33 +138,36 @@ df["cluster"] = df["cluster"].astype(str)
 df = _coerce_float(df, ["latitude","longitude"])
 df = _finite_mask(df, "latitude", "longitude")
 
-if bde != "All" and not sum_df.empty and "sales_name" in sum_df.columns:
+if area_pick and "All" not in area_pick:
+    df = df[df["cluster"].astype(str).isin(area_pick)]
+if city_pick and "All" not in city_pick:
+    df = df[df["city"].astype(str).isin(city_pick)]
+if brand_sel and "All" not in brand_sel:
+    df = df[df["brand"].astype(str).isin(brand_sel)]
+if penetrated and "All" not in penetrated:
+    df = df[df["tag"].astype(str).isin(penetrated)]
+if potential and "All" not in potential:
+    df = df[df["availability"].astype(str).isin(potential)]
+
+if df.empty:
+    st.info("No dealers match your filters.")
+    st.stop()
+
+if bde != "All":
     picks = []
-    clusters_for_bde = sum_df[sum_df["sales_name"]==bde]["cluster"].dropna().unique().tolist()
-    for i in clusters_for_bde:
-        col = f"dist_center_{int(i)}"
-        if col in df.columns:
-            part = df[(pd.to_numeric(df[col], errors="coerce").notna()) & (pd.to_numeric(df[col], errors="coerce") <= radius)].copy()
-            if not part.empty:
-                part["cluster_labels"] = int(i)
-                part["sales_name"] = bde
-                picks.append(part)
+    if not clust_df.empty:
+        clusters_for_bde = clust_df["cluster"].dropna().unique().tolist()
+        for i in clusters_for_bde:
+            col = f"dist_center_{int(i)}"
+            if col in df.columns:
+                part = df[(pd.to_numeric(df[col], errors="coerce").notna()) & (pd.to_numeric(df[col], errors="coerce") <= radius)].copy()
+                if not part.empty:
+                    part["cluster_labels"] = int(i)
+                    part["sales_name"] = bde
+                    picks.append(part)
     df_pick = pd.concat(picks, ignore_index=True) if picks else df.copy()
 else:
     df_pick = df.copy()
-
-if city_pick:
-    df_pick = df_pick[df_pick["city"].astype(str).isin(city_pick)]
-if brand_sel:
-    df_pick = df_pick[df_pick["brand"].astype(str).isin(brand_sel)]
-if penetrated and "All" not in penetrated:
-    df_pick = df_pick[df_pick["tag"].astype(str).isin(penetrated)]
-if potential and "All" not in potential:
-    df_pick = df_pick[df_pick["availability"].astype(str).isin(potential)]
-
-if df_pick.empty:
-    st.info("No dealers match your filters.")
-    st.stop()
 
 df_pick["joined_dse"] = pd.to_numeric(df_pick["joined_dse"], errors="coerce").fillna(0)
 df_pick["active_dse"] = pd.to_numeric(df_pick["active_dse"], errors="coerce").fillna(0)
@@ -175,10 +190,8 @@ if not clusters.empty:
     clusters = _ensure_cols(clusters, {"latitude": np.nan, "longitude": np.nan, "sales_name":"", "cluster":0})
     clusters = _coerce_float(clusters, ["latitude","longitude"])
     clusters = _finite_mask(clusters, "latitude", "longitude")
-if not clusters.empty and bde != "All":
-    clusters = clusters[clusters["sales_name"]==bde]
-if not clusters.empty and not sum_df.empty and "sales_name" in sum_df.columns and "cluster" in sum_df.columns:
-    visits_cnt = sum_df.groupby(["sales_name","cluster"], as_index=False)["cluster"].count().rename(columns={"cluster":"count_visit"})
+if not clusters.empty:
+    visits_cnt = sum_df.groupby(["sales_name","cluster"], as_index=False)["cluster"].count().rename(columns={"cluster":"count_visit"}) if not sum_df.empty else pd.DataFrame(columns=["sales_name","cluster","count_visit"])
     clusters = clusters.merge(visits_cnt, on=["sales_name","cluster"], how="left")
     total_vis = max(float(clusters["count_visit"].fillna(0).sum()), 1.0)
     clusters["size"] = clusters["count_visit"].fillna(0)/total_vis*9000
@@ -186,37 +199,14 @@ if not clusters.empty and not sum_df.empty and "sales_name" in sum_df.columns an
 else:
     clusters = pd.DataFrame([{"latitude":clat,"longitude":clon,"size":5000,"word":"Area"}])
 
+st.markdown("<hr style='margin:8px 0 8px 0'/>", unsafe_allow_html=True)
 st.markdown("<h2 style='font-size:24px;margin:8px 0'>Penetration Map</h2>", unsafe_allow_html=True)
 
 deck_layers = [
-    pdk.Layer(
-        "TextLayer",
-        data=clusters,
-        get_position="[longitude,latitude]",
-        get_text="word",
-        get_size=12,
-        get_color=[0,128,0],
-        get_text_anchor=String("middle"),
-        get_alignment_baseline=String("center"),
-    ),
-    pdk.Layer(
-        "ScatterplotLayer",
-        data=df_pick,
-        get_position="[longitude,latitude]",
-        get_radius=200,
-        get_fill_color="color",
-        pickable=True,
-        auto_highlight=True,
-    ),
-    pdk.Layer(
-        "ScatterplotLayer",
-        data=clusters,
-        get_position="[longitude,latitude]",
-        get_radius="size",
-        get_fill_color=[200,30,0,90],
-    ),
+    pdk.Layer("TextLayer", data=clusters, get_position="[longitude,latitude]", get_text="word", get_size=12, get_color=[0,128,0], get_text_anchor=String("middle"), get_alignment_baseline=String("center")),
+    pdk.Layer("ScatterplotLayer", data=df_pick, get_position="[longitude,latitude]", get_radius=200, get_fill_color="color", pickable=True, auto_highlight=True),
+    pdk.Layer("ScatterplotLayer", data=clusters, get_position="[longitude,latitude]", get_radius="size", get_fill_color=[200,30,0,90]),
 ]
-
 st.pydeck_chart(pdk.Deck(map_style=None, initial_view_state=pdk.ViewState(longitude=clon, latitude=clat, zoom=10, pitch=50), tooltip={"text":"Dealer: {name}\nBrand: {brand}\nAvailability: {availability}\nActivity: {engagement_bucket}"}, layers=deck_layers))
 
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -249,6 +239,6 @@ pie = px.pie(pie_src, names="availability", values="Total", hole=0.35)
 st.plotly_chart(pie, use_container_width=True, key="pie_avail")
 
 st.markdown("<h2 style='font-size:24px;margin:8px 0'>Dealers Detail</h2>", unsafe_allow_html=True)
-show_cols = ["brand","name","city","tag","joined_dse","active_dse","nearest_end_date","availability","will_expire_30d"]
-df_table = df_pick[show_cols].rename(columns={"brand":"Brand","name":"Dealer Name","city":"City","tag":"Activity","joined_dse":"Total Joined DSE","active_dse":"Total Active DSE","nearest_end_date":"Nearest Package End Date","availability":"Availability","will_expire_30d":"Expire ≤30d"}).drop_duplicates().reset_index(drop=True)
+show_cols = ["cluster","brand","name","city","tag","joined_dse","active_dse","nearest_end_date","availability","will_expire_30d"]
+df_table = df_pick[show_cols].rename(columns={"cluster":"Area","brand":"Brand","name":"Dealer Name","city":"City","tag":"Activity","joined_dse":"Total Joined DSE","active_dse":"Total Active DSE","nearest_end_date":"Nearest Package End Date","availability":"Availability","will_expire_30d":"Expire ≤30d"}).drop_duplicates().reset_index(drop=True)
 st.dataframe(df_table, use_container_width=True)
