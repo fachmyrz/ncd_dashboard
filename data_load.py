@@ -1,45 +1,40 @@
-# data_load.py
 import gspread
 import pandas as pd
 import streamlit as st
-from typing import Dict
 
-@st.cache_data(ttl=300)  # cache for 5 minutes to avoid repeated slow HTTP calls
 def _client():
-    creds = st.secrets.get("google_creds")
-    if not creds:
-        raise RuntimeError("Missing google_creds in Streamlit secrets.")
-    return gspread.service_account_from_dict(creds)
+    return gspread.service_account_from_dict(st.secrets["google_creds"])
 
 def read_ws_by_id(sheet_id: str, tab: str) -> pd.DataFrame:
-    """Return DataFrame for exact tab name. Empty DataFrame if anything fails."""
     if not sheet_id or not tab:
+        raise RuntimeError("Missing sheet id or tab")
+    sh = _client().open_by_key(sheet_id)
+    ws = sh.worksheet(tab)
+    vals = ws.get_all_values()
+    if not vals or len(vals) < 2:
         return pd.DataFrame()
-    try:
-        client = _client()
-        sh = client.open_by_key(sheet_id)
-        ws = sh.worksheet(tab)
-        vals = ws.get_all_values()
-        if not vals:
-            return pd.DataFrame()
-        cols = vals[0]
-        rows = vals[1:]
-        return pd.DataFrame(rows, columns=cols)
-    except Exception:
-        return pd.DataFrame()
+    return pd.DataFrame(vals[1:], columns=vals[0])
 
-@st.cache_data(ttl=300)
-def load_all_sheets() -> Dict[str, pd.DataFrame]:
-    sids = st.secrets.get("sheet_ids", {})
+@st.cache_data(ttl=300, show_spinner=False)
+def get_sheets():
+    sids = st.secrets["sheet_ids"]
+    need_cluster = read_ws_by_id(sids["need_cluster"], "By Cluster")
+    location_detail = read_ws_by_id(sids["package_master"], "City Slug")
+    running_order = read_ws_by_id(sids["package_master"], "Database")
+    dealers = read_ws_by_id(sids["dealer_book"], "Dealers")
+    visits = read_ws_by_id(sids["dealer_book"], "Visits")
+    try:
+        orders = read_ws_by_id(sids["orders_book"], "Orders")
+    except Exception:
+        orders = pd.DataFrame()
     return {
-        "cluster_left": read_ws_by_id(sids.get("need_cluster",""), "By Cluster"),
-        "location_detail": read_ws_by_id(sids.get("package_master",""), "City Slug"),
-        "df_dealer": read_ws_by_id(sids.get("dealer_book",""), "Dealers"),
-        "df_visit": read_ws_by_id(sids.get("dealer_book",""), "Visits"),
-        "running_order": read_ws_by_id(sids.get("package_master",""), "Database"),
-        "sales_orders": read_ws_by_id(sids.get("orders_book",""), "Orders")
+        "need_cluster": need_cluster,
+        "location_detail": location_detail,
+        "running_order": running_order,
+        "dealers": dealers,
+        "visits": visits,
+        "orders": orders,
     }
 
-# convenience: a single cached call
-def get_sheets():
-    return load_all_sheets()
+def clear_cache():
+    get_sheets.clear()
