@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 import numpy as np
 import geopy.distance
@@ -41,6 +42,15 @@ def _pick(df, names, default=None):
             return n
     return default
 
+def _split_latlon(col):
+    if pd.isna(col):
+        return np.nan, np.nan
+    s = str(col).strip().replace(";", ",")
+    m = re.search(r'(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)', s)
+    if not m:
+        return np.nan, np.nan
+    return _to_float(m.group(1)), _to_float(m.group(2))
+
 def _normalize_dealers(df):
     if df.empty:
         return pd.DataFrame(columns=["id_dealer_outlet","brand","business_type","city","name","state","latitude","longitude"])
@@ -70,11 +80,21 @@ def _normalize_visits(df):
     v.columns = [c.strip() for c in v.columns]
     emp = _pick(v, ["Employee Name","employee_name","Nama Karyawan","nama karyawan"])
     cli = _pick(v, ["Client Name","client_name","Nama Klien"])
-    dt_start = _pick(v, ["Date Time Start","date_time_start","Datetime Start","start_time","Start Time"])
-    dt_end = _pick(v, ["Date Time End","date_time_end","Datetime End","end_time","End Time"])
-    lon_s = _pick(v, ["Longitude Start","long","lon","lng","Longitude"])
-    lat_s = _pick(v, ["Latitude Start","lat","latitude","Latitude"])
-    v = v[[c for c in [emp,cli,dt_start,dt_end,lon_s,lat_s] if c]].rename(columns={emp:"employee_name",cli:"client_name",dt_start:"date_time_start",dt_end:"date_time_end",lon_s:"long",lat_s:"lat"})
+    dt_start = _pick(v, ["Date Time Start","date_time_start","Datetime Start","start_time","Start Time","Tanggal Datang","Date Start"])
+    dt_end = _pick(v, ["Date Time End","date_time_end","Datetime End","end_time","End Time","Tanggal Pulang","Date End"])
+    lon_s = _pick(v, ["Longitude Start","Longitude"])
+    lat_s = _pick(v, ["Latitude Start","Latitude"])
+    latlon = _pick(v, ["Latitude & Longitude Datang","Latitude & Longitude","Latitude & Longitude Start"])
+    use_cols = [c for c in [emp,cli,dt_start,dt_end,lon_s,lat_s,latlon] if c]
+    v = v[use_cols].rename(columns={
+        emp:"employee_name", cli:"client_name",
+        dt_start:"date_time_start", dt_end:"date_time_end",
+        lon_s:"long", lat_s:"lat", latlon:"latlon"
+    })
+    if "latlon" in v.columns:
+        lat_series, lon_series = zip(*v["latlon"].apply(_split_latlon))
+        v["lat"] = pd.Series(lat_series, index=v.index)
+        v["long"] = pd.Series(lon_series, index=v.index)
     v["time_start"] = v["date_time_start"].astype(str).apply(lambda x: x.split("@")[1] if "@" in x else x)
     v["time_end"] = v["date_time_end"].astype(str).apply(lambda x: x.split("@")[1] if "@" in x else x)
     v["date"] = v["date_time_start"].astype(str).apply(lambda x: x.split("@")[0] if "@" in x else x)
@@ -85,7 +105,11 @@ def _normalize_visits(df):
     v["duration"] = td.dt.total_seconds()/60
     v["lat"] = v["lat"].apply(_to_float)
     v["long"] = v["long"].apply(_to_float)
-    return v
+    out_cols = ["employee_name","client_name","date","time_start","time_end","lat","long","duration"]
+    for c in out_cols:
+        if c not in v.columns:
+            v[c] = pd.NA
+    return v[out_cols]
 
 def _normalize_orders(df):
     if df.empty:
