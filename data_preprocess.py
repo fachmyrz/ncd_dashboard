@@ -50,14 +50,15 @@ def _normalize_dealers(df):
     brand = _pick(d, ["brand","Brand"])
     city = _pick(d, ["city","City"])
     name = _pick(d, ["name","dealer_name","Dealer Name"])
-    lat = _pick(d, ["latitude","Latitude"])
-    lon = _pick(d, ["longitude","Longitude"])
-    state = _pick(d, ["state","State"])
-    d = d[[c for c in [idcol,brand,city,name,state,lat,lon] if c]].rename(columns={idcol:"id_dealer_outlet",brand:"brand",city:"city",name:"name",state:"state",lat:"latitude",lon:"longitude"})
+    lat = _pick(d, ["latitude","Latitude","lat","Lat"])
+    lon = _pick(d, ["longitude","Longitude","long","lon","Lng"])
+    state = _pick(d, ["state","State","province"])
+    use_cols = [c for c in [idcol,brand,city,name,state,lat,lon] if c]
+    d = d[use_cols].rename(columns={idcol:"id_dealer_outlet",brand:"brand",city:"city",name:"name",state:"state",lat:"latitude",lon:"longitude"})
     d["business_type"] = "Car"
-    d = d.dropna(subset=["id_dealer_outlet","brand","city","name","latitude","longitude"]).copy()
     d["latitude"] = d["latitude"].apply(_to_float)
     d["longitude"] = d["longitude"].astype(str).str.strip(".").apply(_to_float)
+    d = d.dropna(subset=["id_dealer_outlet","brand","city","name","latitude","longitude"])
     d = d[d.apply(lambda r: _valid_latlon(r["latitude"], r["longitude"]), axis=1)]
     d["id_dealer_outlet"] = pd.to_numeric(d["id_dealer_outlet"], errors="coerce").astype("Int64")
     return d.reset_index(drop=True)
@@ -67,7 +68,7 @@ def _normalize_visits(df):
         return pd.DataFrame(columns=["employee_name","client_name","date","time_start","time_end","lat","long","duration"])
     v = df.copy()
     v.columns = [c.strip() for c in v.columns]
-    emp = _pick(v, ["Employee Name","employee_name","nama karyawan","Nama Karyawan"])
+    emp = _pick(v, ["Employee Name","employee_name","Nama Karyawan","nama karyawan"])
     cli = _pick(v, ["Client Name","client_name","Nama Klien"])
     dt_start = _pick(v, ["Date Time Start","date_time_start","Datetime Start","start_time","Start Time"])
     dt_end = _pick(v, ["Date Time End","date_time_end","Datetime End","end_time","End Time"])
@@ -124,8 +125,16 @@ def get_summary_data(visits, pick_date="2024-11-01"):
     return summary, data
 
 def compute_clusters(summary, dealers):
-    if summary.empty or dealers.empty:
+    if dealers.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    if summary.empty:
+        a = dealers[["id_dealer_outlet","brand","business_type","city","name","latitude","longitude"]].copy()
+        a["tag"] = "avail"
+        a["sales_name"] = "All"
+        a["dist_center_0"] = 0.0
+        c = pd.DataFrame([{"latitude":float(a["latitude"].mean()),"longitude":float(a["longitude"].mean()),"sales_name":"All","cluster":0}])
+        s = pd.DataFrame(columns=["date","client_name","latitude","longitude","sales_name","cluster"])
+        return s, a, c
     area_rows = []
     for nm in summary["employee_name"].dropna().unique():
         lat_long = summary[summary["employee_name"]==nm][["lat","long"]]
@@ -138,7 +147,13 @@ def compute_clusters(summary, dealers):
         area_rows.append([nm,min_lat,max_lat,min_lon,max_lon,lat_km*lon_km])
     cov = pd.DataFrame(area_rows, columns=["employee_name","min_lat","max_lat","min_long","max_long","area"])
     if cov.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        a = dealers[["id_dealer_outlet","brand","business_type","city","name","latitude","longitude"]].copy()
+        a["tag"] = "avail"
+        a["sales_name"] = "All"
+        a["dist_center_0"] = 0.0
+        c = pd.DataFrame([{"latitude":float(a["latitude"].mean()),"longitude":float(a["longitude"].mean()),"sales_name":"All","cluster":0}])
+        s = pd.DataFrame(columns=["date","client_name","latitude","longitude","sales_name","cluster"])
+        return s, a, c
     sums, avs, centers = [], [], []
     for nm in cov["employee_name"].unique():
         rect = cov[cov["employee_name"]==nm].iloc[0]
@@ -165,18 +180,18 @@ def compute_clusters(summary, dealers):
             c["cluster"] = range(len(km.cluster_centers_))
         else:
             s["cluster"] = 0
-            latm = float(s["latitude"].mean()) if len(s) else np.nan
-            lonm = float(s["longitude"].mean()) if len(s) else np.nan
+            latm = float(s["latitude"].mean()) if len(s) else float(pool["latitude"].mean()) if not pool.empty else np.nan
+            lonm = float(s["longitude"].mean()) if len(s) else float(pool["longitude"].mean()) if not pool.empty else np.nan
             a["dist_center_0"] = a.apply(lambda r: _km(latm, lonm, r["latitude"], r["longitude"]), axis=1)
             c = pd.DataFrame([[latm, lonm, nm, 0]], columns=["latitude","longitude","sales_name","cluster"])
         sums.append(s)
         avs.append(a)
         centers.append(c)
-    return pd.concat(sums), pd.concat(avs), pd.concat(centers)
+    return pd.concat(sums) if sums else pd.DataFrame(), pd.concat(avs) if avs else pd.DataFrame(), pd.concat(centers) if centers else pd.DataFrame()
 
 def compute_running_orders(running_order):
     if running_order.empty:
-        return pd.DataFrame(columns=["id_dealer_outlet","joined_dse","active_dse","nearest_end_date"])
+        return pd.DataFrame(columns=["id_dealer_outlet","joined_dse","active_dse","nearest_end_date","dealer_name"])
     act = running_order[["Dealer Id","Dealer Name","IsActive","End Date"]].rename(columns={"Dealer Id":"id_dealer_outlet","Dealer Name":"dealer_name"})
     act = act[act["IsActive"]=="1"].copy()
     act["End Date"] = pd.to_datetime(act["End Date"], errors="coerce")
@@ -200,14 +215,20 @@ def compute_revenue(orders):
     last30 = o[o["order_date"]>=today-pd.Timedelta(days=30)].groupby("id_dealer_outlet", as_index=False)["revenue"].sum().rename(columns={"revenue":"revenue_last_30d"})
     return rev_total.merge(mtd, on="id_dealer_outlet", how="left").merge(last30, on="id_dealer_outlet", how="left")
 
-def assemble_availability(avail_df, location_detail, need_cluster, run_group, revenue):
-    if avail_df.empty:
+def assemble_availability(avail_df, location_detail, need_cluster, run_group, revenue, dealers):
+    base = avail_df.copy()
+    if base.empty and not dealers.empty:
+        base = dealers[["id_dealer_outlet","brand","business_type","city","name","latitude","longitude"]].copy()
+        base["tag"] = "avail"
+        base["sales_name"] = "All"
+        base["dist_center_0"] = 0.0
+    if base.empty:
         return pd.DataFrame()
-    avail_df["id_dealer_outlet"] = pd.to_numeric(avail_df["id_dealer_outlet"], errors="coerce").astype("Int64")
-    if avail_df.shape[1] > 9:
-        mins = avail_df.fillna(1e12).iloc[:, 9:].min(axis=1)
-        avail_df.iloc[:, 9:] = avail_df.iloc[:, 9:].where(avail_df.iloc[:, 9:].eq(mins, axis=0), np.nan)
-    df = avail_df.merge(run_group.drop(columns=["dealer_name"], errors="ignore"), on="id_dealer_outlet", how="left")
+    base["id_dealer_outlet"] = pd.to_numeric(base["id_dealer_outlet"], errors="coerce").astype("Int64")
+    if base.shape[1] > 9:
+        mins = base.fillna(1e12).iloc[:, 9:].min(axis=1)
+        base.iloc[:, 9:] = base.iloc[:, 9:].where(base.iloc[:, 9:].eq(mins, axis=0), np.nan)
+    df = base.merge(run_group.drop(columns=["dealer_name"], errors="ignore"), on="id_dealer_outlet", how="left")
     if not location_detail.empty:
         loc = location_detail.rename(columns={"City":"city","Cluster":"cluster"})
         df = df.merge(loc[["city","cluster"]], on="city", how="left")
@@ -228,11 +249,9 @@ def compute_all():
     running_order = s["running_order"]
     need_cluster = s["need_cluster"]
     orders = _normalize_orders(s["orders"])
-    if dealers.empty:
-        return {"dealers": dealers, "visits": visits, "sum_df": pd.DataFrame(), "avail_df_merge": pd.DataFrame(), "clust_df": pd.DataFrame()}
     summary, _ = get_summary_data(visits)
     sum_df, avail_df, clust_df = compute_clusters(summary, dealers)
     ro_group = compute_running_orders(running_order)
     revenue = compute_revenue(orders)
-    avail_df_merge = assemble_availability(avail_df, location_detail, need_cluster, ro_group, revenue)
+    avail_df_merge = assemble_availability(avail_df, location_detail, need_cluster, ro_group, revenue, dealers)
     return {"dealers": dealers, "visits": visits, "sum_df": sum_df, "avail_df_merge": avail_df_merge, "clust_df": clust_df}
