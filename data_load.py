@@ -16,6 +16,7 @@ def _read_by_title(book_title: str, tab: str) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_sources():
     need_cluster = _read_by_title("Gen x Needed Actual Lead Type 71", "By Cluster")
     location_detail = _read_by_title("Car Brands Lead Monthly", "Sheet3")
@@ -23,4 +24,11 @@ def get_sources():
     df_dealer = _read_by_title("Dealers Directory", "Dealers")
     orders = _read_by_title("ID NCD - Order Dashboard", "Orders")
     running_order = _read_by_title("ID NCD - Package Master", "Database")
-    return {"need_cluster": need_cluster, "location_detail": location_detail, "df_visit": df_visit, "df_dealer": df_dealer, "orders": orders, "running_order": running_order}
+    return {
+        "need_cluster": need_cluster,
+        "location_detail": location_detail,
+        "df_visit": df_visit,
+        "df_dealer": df_dealer,
+        "orders": orders,
+        "running_order": running_order,
+    }
