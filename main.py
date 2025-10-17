@@ -100,13 +100,12 @@ if button and name and penetrated and potential and city_pick is not None:
     working['nearest_end_date'] = pd.to_datetime(working.get('nearest_end_date'), errors="coerce").astype(str)
     working['nearest_end_date'] = np.where(working['nearest_end_date']=='NaT',"No Package Found",working['nearest_end_date'])
 
-    if penetrated and potential and city_pick is not None:
-        working = working[
-            (working.get("city","").isin(city_pick)) &
-            (working.get("availability","").isin(potential)) &
-            (working.get("tag","").isin(penetrated)) &
-            (working.get("brand","").isin(brand if brand else []))
-        ].copy()
+    working = working[
+        (working.get("city","").isin(city_pick)) &
+        (working.get("availability","").isin(potential)) &
+        (working.get("tag","").isin(penetrated)) &
+        (working.get("brand","").isin(brand if brand else []))
+    ].copy()
 
     dealer_rec = working.copy()
     if dealer_rec.empty:
