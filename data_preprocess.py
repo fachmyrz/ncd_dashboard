@@ -167,55 +167,49 @@ def compute_availability(dealers: pd.DataFrame, ro_group: pd.DataFrame, location
     df["tag"] = np.where(df["nearest_end_date"].isna(),"Not Active","Active")
     return df
 
-def cluster_by_bde(visits: pd.DataFrame, dealers: pd.DataFrame):
-    sums = []
-    cl_centers = []
-    avails = []
-    names = visits["employee_name"].dropna().unique().tolist() if "employee_name" in visits.columns else []
-    for name in names:
-        v = visits[visits["employee_name"]==name][["visit_datetime","client_name","lat","long"]].dropna().copy()
-        v = v.rename(columns={"lat":"latitude","long":"longitude"})
-        v = v[_valid_mask(v["latitude"], v["longitude"])]
-        v["sales_name"] = name
-        dbox = dealers.copy()
-        dbox = dbox[_valid_mask(dbox["latitude"], dbox["longitude"])]
-        dbox["sales_name"] = name
-        if len(v) >= 4:
-            X = v[["latitude","longitude"]].values.tolist()
-            wcss = []
-            for k in range(4, min(9, len(v))):
-                km = KMeans(n_clusters=k, n_init="auto").fit(X)
-                wcss.append(km.inertia_)
-            if len(wcss) >= 2:
-                kl = KneeLocator(range(4, 4+len(wcss)), wcss, curve="convex", direction="decreasing")
-                n_cluster = kl.elbow if kl.elbow is not None else 4
-            else:
-                n_cluster = 4
-            kmeans = KMeans(n_clusters=n_cluster, n_init="auto").fit(X)
-            v["cluster"] = kmeans.labels_
-            centers = pd.DataFrame(kmeans.cluster_centers_, columns=["latitude","longitude"])
-            centers["sales_name"] = name
-            centers["cluster"] = range(len(centers))
-            for i in range(len(centers)):
-                latc, lonc = centers.loc[i,"latitude"], centers.loc[i,"longitude"]
-                avails_i = dbox.copy()
-                avails_i[f"dist_center_{i}"] = avails_i.apply(lambda x: _km(latc, lonc, x.latitude, x.longitude), axis=1)
-                avails.append(avails_i)
-            cl_centers.append(centers)
+def cluster_by_bde(visits: pd.DataFrame, dealers: pd.DataFrame, only_name: str | None):
+    if only_name in (None, "All"):
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    vsel = visits[visits["employee_name"]==only_name][["visit_datetime","client_name","lat","long"]].dropna().copy()
+    if vsel.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    vsel = vsel.rename(columns={"lat":"latitude","long":"longitude"})
+    vsel = vsel[_valid_mask(vsel["latitude"], vsel["longitude"])]
+    vsel["sales_name"] = only_name
+    dbox = dealers.copy()
+    dbox = dbox[_valid_mask(dbox["latitude"], dbox["longitude"])]
+    dbox["sales_name"] = only_name
+    if len(vsel) >= 4:
+        X = vsel[["latitude","longitude"]].values.tolist()
+        wcss = []
+        for k in range(4, min(9, len(vsel))):
+            km = KMeans(n_clusters=k, n_init="auto").fit(X)
+            wcss.append(km.inertia_)
+        if len(wcss) >= 2:
+            kl = KneeLocator(range(4, 4+len(wcss)), wcss, curve="convex", direction="decreasing")
+            n_cluster = kl.elbow if kl.elbow is not None else 4
         else:
-            v["cluster"] = 0
-            latm = float(v["latitude"].mean()) if len(v) else np.nan
-            lonm = float(v["longitude"].mean()) if len(v) else np.nan
-            centers = pd.DataFrame([[latm, lonm, name, 0]], columns=["latitude","longitude","sales_name","cluster"])
-            avails_i = dbox.copy()
-            avails_i["dist_center_0"] = avails_i.apply(lambda x: _km(latm, lonm, x.latitude, x.longitude), axis=1)
-            avails.append(avails_i)
-            cl_centers.append(centers)
-        sums.append(v)
-    sum_df = pd.concat(sums) if sums else pd.DataFrame(columns=["visit_datetime","client_name","latitude","longitude","sales_name","cluster"])
-    avail_df = pd.concat(avails) if avails else pd.DataFrame()
-    clust_df = pd.concat(cl_centers) if cl_centers else pd.DataFrame(columns=["latitude","longitude","sales_name","cluster"])
-    return sum_df, avail_df, clust_df
+            n_cluster = 4
+        kmeans = KMeans(n_clusters=n_cluster, n_init="auto").fit(X)
+        vsel["cluster"] = kmeans.labels_
+        centers = pd.DataFrame(kmeans.cluster_centers_, columns=["latitude","longitude"])
+        centers["sales_name"] = only_name
+        centers["cluster"] = range(len(centers))
+        avails = []
+        for i in range(len(centers)):
+            latc, lonc = centers.loc[i,"latitude"], centers.loc[i,"longitude"]
+            av_i = dbox.copy()
+            av_i[f"dist_center_{i}"] = av_i.apply(lambda x: _km(latc, lonc, x.latitude, x.longitude), axis=1)
+            avails.append(av_i)
+        avail_df = pd.concat(avails) if avails else pd.DataFrame()
+        return vsel, avail_df, centers
+    vsel["cluster"] = 0
+    latm = float(vsel["latitude"].mean()) if len(vsel) else np.nan
+    lonm = float(vsel["longitude"].mean()) if len(vsel) else np.nan
+    centers = pd.DataFrame([[latm, lonm, only_name, 0]], columns=["latitude","longitude","sales_name","cluster"])
+    av_i = dbox.copy()
+    av_i["dist_center_0"] = av_i.apply(lambda x: _km(latm, lonm, x.latitude, x.longitude), axis=1)
+    return vsel, av_i, centers
 
 def get_summary_data(visits: pd.DataFrame):
     if visits.empty:
@@ -231,7 +225,7 @@ def get_summary_data(visits: pd.DataFrame):
     agg["month_year"] = pd.to_datetime(agg["date"]).astype("datetime64[M]").astype(str)
     return v, agg
 
-def compute_all():
+def compute_all(bde_filter: str | None = None):
     sheets = get_sheets()
     dealers_raw = sheets.get("dealers", pd.DataFrame())
     visits_raw = sheets.get("visits", pd.DataFrame())
@@ -243,7 +237,7 @@ def compute_all():
     visits = assign_visits_to_dealers(visits, dealers, max_km=1.0)
     ro_group = prepare_run_order(running_order)
     avail_df_merge = compute_availability(dealers, ro_group, location_detail, need_cluster)
-    sum_df, avail_df, clust_df = cluster_by_bde(visits, dealers)
+    sum_df, avail_df, clust_df = cluster_by_bde(visits, dealers, bde_filter)
     if not avail_df.empty:
         dist_cols = [c for c in avail_df.columns if str(c).startswith("dist_center_")]
         if dist_cols:
@@ -257,4 +251,4 @@ def compute_all():
                 avail_df_merge = avail_df_merge.merge(avail_df[["id_dealer_outlet"]+dist_cols], on="id_dealer_outlet", how="left")
             except Exception:
                 pass
-    return {"dealers": dealers, "visits": visits, "sum_df": sum_df, "clust_df": clust_df, "avail_df_merge": avail_df_merge}
+    return {"dealers": dealers, "visits": visits, "sum_df": sum_df, "clust_df": clust_df, "avail_df_merge": avail_df_merge, "location_detail": sheets.get("location_detail", pd.DataFrame())}
