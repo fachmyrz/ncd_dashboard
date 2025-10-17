@@ -6,14 +6,17 @@ def _client():
     return gspread.service_account_from_dict(st.secrets["google_creds"])
 
 def read_ws_by_id(sheet_id: str, tab: str) -> pd.DataFrame:
-    if not sheet_id or not tab:
-        raise RuntimeError("Missing sheet id or tab")
-    sh = _client().open_by_key(sheet_id)
-    ws = sh.worksheet(tab)
-    vals = ws.get_all_values()
-    if not vals or len(vals) < 2:
+    try:
+        if not sheet_id or not tab:
+            return pd.DataFrame()
+        sh = _client().open_by_key(sheet_id)
+        ws = sh.worksheet(tab)
+        vals = ws.get_all_values()
+        if not vals or len(vals) < 2:
+            return pd.DataFrame()
+        return pd.DataFrame(vals[1:], columns=vals[0])
+    except Exception:
         return pd.DataFrame()
-    return pd.DataFrame(vals[1:], columns=vals[0])
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_sheets():
@@ -23,10 +26,7 @@ def get_sheets():
     running_order = read_ws_by_id(sids["package_master"], "Database")
     dealers = read_ws_by_id(sids["dealer_book"], "Dealers")
     visits = read_ws_by_id(sids["dealer_book"], "Visits")
-    try:
-        orders = read_ws_by_id(sids["orders_book"], "Orders")
-    except Exception:
-        orders = pd.DataFrame()
+    orders = read_ws_by_id(sids.get("orders_book",""), "Orders") if "orders_book" in sids else pd.DataFrame()
     return {
         "need_cluster": need_cluster,
         "location_detail": location_detail,
@@ -35,6 +35,3 @@ def get_sheets():
         "visits": visits,
         "orders": orders,
     }
-
-def clear_cache():
-    get_sheets.clear()
