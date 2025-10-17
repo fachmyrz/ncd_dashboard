@@ -91,9 +91,9 @@ def assign_visits_to_dealers(visits: pd.DataFrame, dealers: pd.DataFrame, max_km
         return v
     d = dealers[["id_dealer_outlet","name","latitude","longitude","city","brand"]].dropna().copy()
     v = visits.copy()
-    left = v.merge(d[["id_dealer_outlet","name"]], left_on="client_name", right_on="name", how="left", suffixes=("","_d"))
+    left = v.merge(d[["id_dealer_outlet","name"]], left_on="client_name", right_on="name", how="left")
     v["matched_dealer_id"] = left["id_dealer_outlet"]
-    v["matched_client"] = left["name_d"]
+    v["matched_client"] = left["name"] if "name" in left.columns else pd.NA
     mask = v["matched_dealer_id"].isna()
     if mask.any():
         base = v[mask].copy()
@@ -106,7 +106,7 @@ def assign_visits_to_dealers(visits: pd.DataFrame, dealers: pd.DataFrame, max_km
                     return pd.Series([pd.NA, pd.NA])
                 dist = dv.apply(lambda r: geopy.distance.geodesic((lat,lon),(r.latitude,r.longitude)).km, axis=1)
                 dv_ = dv.assign(_km=dist).sort_values("_km")
-                if dv_.empty or dv_["_km"].iloc[0] > max_km:
+                if dv_.empty or float(dv_["_km"].iloc[0]) > max_km:
                     return pd.Series([pd.NA, pd.NA])
                 return pd.Series([dv_.iloc[0]["id_dealer_outlet"], dv_.iloc[0]["name"]])
             nn = base.apply(nearest, axis=1)
