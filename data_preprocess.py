@@ -186,9 +186,12 @@ if not avail_df.empty:
 
 dist_cols = [c for c in avail_df.columns if c.startswith("dist_center_")]
 if dist_cols:
-    min_values = avail_df[dist_cols].apply(pd.to_numeric, errors="coerce").fillna(1e12).min(axis=1)
+    vals_min = avail_df[dist_cols].apply(pd.to_numeric, errors="coerce")
+    min_values = vals_min.min(axis=1)
     for c in dist_cols:
-        avail_df[c] = np.where(pd.to_numeric(avail_df[c], errors="coerce").round(6) == min_values.round(6), avail_df[c], np.nan)
+        vals = pd.to_numeric(avail_df[c], errors="coerce")
+        mask = np.isfinite(vals) & np.isfinite(min_values) & np.isclose(vals, min_values, rtol=0, atol=1e-6)
+        avail_df[c] = np.where(mask, vals, np.nan)
 
 avail_df_merge = avail_df.merge(grouped_run_order, how="left", on="id_dealer_outlet")
 ld = location_detail.rename(columns={"City":"city","Cluster":"cluster"})
