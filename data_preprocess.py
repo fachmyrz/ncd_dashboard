@@ -6,48 +6,99 @@ from sklearn.cluster import KMeans
 from kneed import KneeLocator
 from datetime import datetime, timedelta
 
-df_dealer = df_dealer.copy() if not df_dealer.empty else pd.DataFrame(columns=['id_dealer_outlet','brand','business_type','city','name','state','latitude','longitude'])
+if 'df_dealer' not in globals() or df_dealer is None:
+    df_dealer = pd.DataFrame(columns=['id_dealer_outlet','brand','business_type','city','name','state','latitude','longitude'])
+else:
+    df_dealer = df_dealer.copy()
 df_dealer['business_type'] = df_dealer.get('business_type', pd.Series(["Car"]*len(df_dealer)))
-df_dealer = df_dealer[['id_dealer_outlet','brand','business_type','city','name','state','latitude','longitude']]
+df_dealer = df_dealer[['id_dealer_outlet','brand','business_type','city','name','state','latitude','longitude']].copy()
 df_dealer = df_dealer[df_dealer.business_type.isin(['Car','Bike'])]
 df_dealer = df_dealer.dropna().reset_index(drop=True)
 if not df_dealer.empty:
-    df_dealer['latitude'] = df_dealer['latitude'].str.replace(',', '', regex=False).astype(float)
-    df_dealer['longitude'] = df_dealer['longitude'].str.replace(',', '', regex=False).str.strip('.').astype(float)
+    df_dealer['latitude'] = df_dealer['latitude'].astype(str).str.replace(',', '', regex=False)
+    df_dealer['longitude'] = df_dealer['longitude'].astype(str).str.replace(',', '', regex=False).str.strip('.')
+    df_dealer['latitude'] = pd.to_numeric(df_dealer['latitude'], errors='coerce')
+    df_dealer['longitude'] = pd.to_numeric(df_dealer['longitude'], errors='coerce')
 
-df_visit = df_visit.copy() if not df_visit.empty else pd.DataFrame(columns=['Employee Name','Client Name','Date Time Start','Date Time End','Note Start','Note End','Longitude Start','Latitude Start'])
-df_visit = df_visit[['Employee Name','Client Name','Date Time Start','Date Time End','Note Start','Note End','Longitude Start','Latitude Start']]
+if 'df_visit' not in globals() or df_visit is None:
+    df_visit = pd.DataFrame(columns=['Employee Name','Client Name','Date Time Start','Date Time End','Note Start','Note End','Longitude Start','Latitude Start'])
+else:
+    df_visit = df_visit.copy()
+expected_cols = ['Employee Name','Client Name','Date Time Start','Date Time End','Note Start','Note End','Longitude Start','Latitude Start']
+for c in expected_cols:
+    if c not in df_visit.columns:
+        df_visit[c] = np.nan
+df_visit = df_visit[expected_cols].copy()
 df_visit.rename(columns={'Employee Name':'employee_name','Client Name':'client_name','Date Time Start':'date_time_start','Date Time End':'date_time_end','Note Start':'note_start','Note End':'note_end','Longitude Start':'long','Latitude Start':'lat'},inplace=True)
-df_visit['time_start'] = df_visit['date_time_start'].astype(str).apply(lambda x: x.split('@')[1] if '@' in x else np.nan)
-df_visit['time_end'] = df_visit['date_time_end'].astype(str).apply(lambda x: x.split('@')[1] if '@' in x else np.nan)
-df_visit['date'] = df_visit['date_time_start'].astype(str).apply(lambda x: x.split('@')[0] if '@' in x else np.nan)
-df_visit['date'] = df_visit['date'].str.strip()
-df_visit['date'] = pd.to_datetime(df_visit['date'], format='%d %b %Y', errors='coerce').dt.date
-df_visit.drop(columns=['date_time_start','date_time_end'],inplace=True)
-df_visit['time_start'] = df_visit['time_start'].astype(str).str.strip()
-df_visit['time_end'] = df_visit['time_end'].astype(str).str.strip()
-df_visit['time_start'] = pd.to_datetime(df_visit['time_start'].astype(str), errors='coerce').dt.time
-df_visit['time_end'] = pd.to_datetime(df_visit['time_end'].astype(str), errors='coerce').dt.time
+
+def parse_datetime_field(x):
+    if pd.isna(x):
+        return (pd.NaT, pd.NaT)
+    s = str(x).strip()
+    if '@' in s:
+        parts = s.split('@', 1)
+        date_str = parts[0].strip()
+        time_str = parts[1].strip()
+        dt_date = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+        if pd.isna(dt_date):
+            dt_date = pd.to_datetime(date_str, dayfirst=False, errors='coerce')
+        tmp = pd.to_datetime(time_str, errors='coerce')
+        dt_time = tmp.time() if not pd.isna(tmp) else pd.NaT
+        return (dt_date.date() if not pd.isna(dt_date) else pd.NaT, dt_time)
+    dt = pd.to_datetime(s, dayfirst=False, errors='coerce')
+    if pd.isna(dt):
+        dt = pd.to_datetime(s, dayfirst=True, errors='coerce')
+    if not pd.isna(dt):
+        return (dt.date(), dt.time())
+    parts = s.split()
+    if len(parts) >= 2:
+        date_part = ' '.join(parts[:-1]).strip()
+        time_part = parts[-1].strip()
+        dt_date = pd.to_datetime(date_part, dayfirst=True, errors='coerce')
+        if pd.isna(dt_date):
+            dt_date = pd.to_datetime(date_part, dayfirst=False, errors='coerce')
+        tmp = pd.to_datetime(time_part, errors='coerce')
+        dt_time = tmp.time() if not pd.isna(tmp) else pd.NaT
+        if not pd.isna(dt_date):
+            return (dt_date.date(), dt_time)
+    return (pd.NaT, pd.NaT)
+
+parsed_start = df_visit['date_time_start'].apply(parse_datetime_field)
+parsed_end = df_visit['date_time_end'].apply(parse_datetime_field)
+df_visit[['date','time_start']] = pd.DataFrame(parsed_start.tolist(), index=df_visit.index)
+df_visit[['date_end','time_end']] = pd.DataFrame(parsed_end.tolist(), index=df_visit.index)
+df_visit['date'] = pd.to_datetime(df_visit['date'], errors='coerce').dt.date
+df_visit['time_start'] = df_visit['time_start'].where(df_visit['time_start'].notna(), pd.NaT)
+df_visit['time_end'] = df_visit['time_end'].where(df_visit['time_end'].notna(), pd.NaT)
+df_visit = df_visit.drop(columns=['date_time_start','date_time_end','date_end'], errors='ignore')
 df_visit['duration'] = (pd.to_datetime(df_visit['time_end'].astype(str), errors='coerce') - pd.to_datetime(df_visit['time_start'].astype(str), errors='coerce')).dt.total_seconds() / 60
 
 def get_summary_data(pick_date="2024-11-01"):
-    summary = df_visit[df_visit['date'] >= pd.to_datetime(pick_date).date()] if not df_visit.empty else pd.DataFrame()
+    summary = df_visit[df_visit['date'] >= pd.to_datetime(pick_date).date()].copy() if not df_visit.empty else pd.DataFrame()
     if not summary.empty:
-        summary['lat'] = summary['lat'].astype(float)
-        summary['long'] = summary['long'].astype(float)
+        summary['lat'] = pd.to_numeric(summary['lat'], errors='coerce')
+        summary['long'] = pd.to_numeric(summary['long'], errors='coerce')
         summary.reset_index(drop=True,inplace=True)
     data = []
     if not summary.empty:
         for dates in summary['date'].unique():
             for name in summary['employee_name'].unique():
                 temp = summary[(summary.employee_name == name)&(summary['date'] == dates)].reset_index(drop=True)
-                temp = temp[['date','employee_name','lat','long','time_start','time_end']]
+                temp = temp[['date','employee_name','lat','long','time_start','time_end']].copy()
                 if len(temp) > 1:
                     dist = []
                     time_between = []
                     for i in range(len(temp)-1):
-                        dist.append(round(geopy.distance.geodesic((temp.loc[i+1,'lat'],temp.loc[i+1,'long']), (temp.loc[i,'lat'],temp.loc[i,'long'])).km,2))
-                        time_between.append((pd.to_datetime(str(temp.loc[i+1,'time_start'])) - pd.to_datetime(str(temp.loc[i,'time_start']))).total_seconds()/60)
+                        try:
+                            d = round(geopy.distance.geodesic((temp.loc[i+1,'lat'],temp.loc[i+1,'long']), (temp.loc[i,'lat'],temp.loc[i,'long'])).km,2)
+                        except Exception:
+                            d = 0
+                        dist.append(d)
+                        try:
+                            tb = (pd.to_datetime(str(temp.loc[i+1,'time_start']), errors='coerce') - pd.to_datetime(str(temp.loc[i,'time_start']), errors='coerce')).total_seconds()/60
+                        except Exception:
+                            tb = 0
+                        time_between.append(tb)
                     avg_speed = round(sum(dist) / sum(time_between),2) if sum(time_between) != 0 else 0
                     data.append([dates,name,len(temp),round(np.mean(dist),2),round(np.mean(time_between),2), avg_speed])
                 else:
@@ -63,19 +114,19 @@ summary,data_sum = get_summary_data()
 filter_data = []
 if not summary.empty:
     for name in summary.employee_name.unique():
-        lat_long = summary[summary.employee_name == name][['lat','long']]
+        lat_long = summary[summary.employee_name == name][['lat','long']].copy()
         min_lat = lat_long['lat'].min()
         max_lat = lat_long['lat'].max()
         min_long = lat_long['long'].min()
         max_long = lat_long['long'].max()
-        lat_ = geopy.distance.geodesic((max_lat,min_long),(min_lat,min_long)).km
-        long_ = geopy.distance.geodesic((min_lat,max_long),(min_lat,min_long)).km
+        lat_ = geopy.distance.geodesic((max_lat,min_long),(min_lat,min_long)).km if pd.notna(max_lat) and pd.notna(min_lat) and pd.notna(min_long) else 0
+        long_ = geopy.distance.geodesic((min_lat,max_long),(min_lat,min_long)).km if pd.notna(min_lat) and pd.notna(max_long) and pd.notna(min_long) else 0
         area = lat_ * long_
         filter_data.append([name,min_lat,max_lat,min_long,max_long,area])
 area_coverage = pd.DataFrame(data=filter_data,columns=['employee_name','min_lat','max_lat','min_long','max_long','area']) if len(filter_data)>0 else pd.DataFrame(columns=['employee_name','min_lat','max_lat','min_long','max_long','area'])
 for c in ['min_lat','min_long','max_lat','max_long']:
     if c in area_coverage.columns:
-        area_coverage[c] = area_coverage[c].astype(float)
+        area_coverage[c] = pd.to_numeric(area_coverage[c], errors='coerce')
 
 sum_data = []
 avail_data = []
@@ -89,7 +140,7 @@ def compute_distance(centers, cluster_index, lat, long):
 
 for name in area_coverage.employee_name.unique():
     data_ = area_coverage[area_coverage.employee_name == name]
-    get_dealer = df_dealer[(df_dealer.latitude.between(data_.min_lat.values[0],data_.max_lat.values[0]))&(df_dealer.longitude.between(data_.min_long.values[0],data_.max_long.values[0]))] if not df_dealer.empty else pd.DataFrame()
+    get_dealer = df_dealer[(df_dealer.latitude.between(data_.min_lat.values[0],data_.max_lat.values[0]))&(df_dealer.longitude.between(data_.min_long.values[0],data_.max_long.values[0]))].copy() if not df_dealer.empty else pd.DataFrame()
     sum_ = summary[summary.employee_name == name][['date','client_name','lat','long']].copy() if not summary.empty else pd.DataFrame()
     sum_.rename(columns={'lat':'latitude','long':'longitude'},inplace=True)
     sum_['sales_name'] = name
@@ -136,7 +187,7 @@ for name in area_coverage.employee_name.unique():
         clust_['sales_name'] = name
         clust_['cluster'] = range(len(kmeans_obj.cluster_centers_))
     else:
-        if not sum_.empty:
+        if not sum_.empty and 'latitude' in sum_ and 'longitude' in sum_:
             clust_ = pd.DataFrame([[sum_['latitude'].astype(float).mean(), sum_['longitude'].astype(float).mean()]], columns=['latitude','longitude'])
             clust_['sales_name'] = name
             clust_['cluster'] = [0]
@@ -152,7 +203,7 @@ sum_df = pd.concat(sum_data, ignore_index=True) if len(sum_data)>0 else pd.DataF
 avail_df = pd.concat(avail_data, ignore_index=True) if len(avail_data)>0 else pd.DataFrame()
 clust_df = pd.concat(cluster_center, ignore_index=True) if len(cluster_center)>0 else pd.DataFrame(columns=['latitude','longitude','sales_name','cluster'])
 
-running_order = running_order.copy() if not running_order.empty else pd.DataFrame(columns=['Dealer Id','Dealer Name','IsActive','End Date','LMS Id'])
+running_order = running_order.copy() if 'running_order' in globals() and running_order is not None else pd.DataFrame(columns=['Dealer Id','Dealer Name','IsActive','End Date','LMS Id'])
 active_order = running_order[['Dealer Id','Dealer Name','IsActive','End Date']].copy() if 'Dealer Id' in running_order.columns else pd.DataFrame(columns=['Dealer Id','Dealer Name','IsActive','End Date'])
 active_order = active_order[active_order.IsActive == "1"] if not active_order.empty else active_order
 if not active_order.empty:
@@ -186,7 +237,8 @@ else:
     avail_df_merge = avail_df.copy() if not avail_df.empty else pd.DataFrame()
 
 if not location_detail.empty:
-    location_detail = location_detail.rename(columns={location_detail.columns[0]:'City', location_detail.columns[1]:'Cluster'}) if len(location_detail.columns)>=2 else location_detail
+    if len(location_detail.columns) >= 2:
+        location_detail = location_detail.rename(columns={location_detail.columns[0]:'City', location_detail.columns[1]:'Cluster'})
 else:
     location_detail = pd.DataFrame(columns=['City','Cluster'])
 
@@ -198,7 +250,7 @@ else:
     if 'cluster' not in avail_df_merge.columns:
         avail_df_merge['cluster'] = np.nan
 
-cluster_left = cluster_left.copy() if not cluster_left.empty else pd.DataFrame(columns=['Category','Cluster','Brand','Daily_Gen','Daily_Need','Delta','Tag'])
+cluster_left = cluster_left.copy() if 'cluster_left' in globals() and cluster_left is not None and not cluster_left.empty else pd.DataFrame(columns=['Category','Cluster','Brand','Daily_Gen','Daily_Need','Delta','Tag'])
 if not cluster_left.empty:
     cluster_left = cluster_left.replace({'CHERY':'Chery','Kia':'KIA'})
     cluster_left = cluster_left.rename(columns={'Cluster':'cluster','Brand':'brand','Daily_Gen':'daily_gen','Daily_Need':'daily_need','Delta':'delta','Tag':'availability'})
@@ -209,9 +261,15 @@ else:
     if 'availability' not in avail_df_merge.columns:
         avail_df_merge['availability'] = np.nan
 
-avail_df_merge['tag'] = np.where(avail_df_merge.get('nearest_end_date').isna(),'Not Active', avail_df_merge.get('tag','Not Active'))
+if 'avail_df_merge' not in globals() or avail_df_merge is None:
+    avail_df_merge = pd.DataFrame()
+if 'nearest_end_date' not in avail_df_merge.columns:
+    avail_df_merge['nearest_end_date'] = pd.NA
+if 'tag' not in avail_df_merge.columns:
+    avail_df_merge['tag'] = pd.NA
+avail_df_merge['tag'] = np.where(avail_df_merge['nearest_end_date'].isna(), 'Not Active', avail_df_merge['tag'])
 
-sales_data = sales_data.copy() if not sales_data.empty else pd.DataFrame(columns=['Date of Sales based on Image Proof','Sales ID','Amount'])
+sales_data = sales_data.copy() if 'sales_data' in globals() and sales_data is not None else pd.DataFrame(columns=['Date of Sales based on Image Proof','Sales ID','Amount'])
 if not sales_data.empty:
     rev_data = sales_data[['Date of Sales based on Image Proof','Sales ID','Amount']].copy()
     rev_data.rename(columns={'Date of Sales based on Image Proof':'date','Sales ID':'sales_name','Amount':'amount'},inplace=True)
