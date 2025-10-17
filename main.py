@@ -1,3 +1,5 @@
+import os
+os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 import streamlit as st
 st.set_page_config(page_title="Dealer Penetration Dashboard", page_icon="assets/favicon.png", layout="wide")
 import pandas as pd
@@ -249,3 +251,4 @@ if button and name != "" and penetrated != "" and potential != "" and 'city_pick
         for tab, area_label in zip(st.tabs(tab_labels), tab_labels):
             with tab:
                 some_output(area_label)
+
